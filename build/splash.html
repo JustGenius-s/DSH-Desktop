@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>DSH-Deck</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .wrap { text-align: center; padding: 0 32px; }
+    .title { font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
+    .bar {
+      width: 220px;
+      height: 3px;
+      background: #1f2733;
+      border-radius: 2px;
+      margin: 20px auto 14px;
+      overflow: hidden;
+    }
+    .bar::after {
+      content: "";
+      display: block;
+      width: 40%;
+      height: 100%;
+      background: #3fb950;
+      border-radius: 2px;
+      animation: slide 1.1s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(320%); }
+    }
+    #status { font-size: 13px; color: #8b949e; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">DSH-Deck</div>
+    <div class="bar"></div>
+    <div id="status">正在准备…</div>
+  </div>
+  <script>
+    window.__setStatus = function (text) {
+      document.getElementById('status').textContent = text
+    }
+  </script>
+</body>
+</html>
