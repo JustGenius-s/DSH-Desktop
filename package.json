@@ -1,8 +1,8 @@
 {
-  "name": "@deepseek-ai/dsh-desktop",
+  "name": "dsh-decktop",
   "version": "0.1.0",
   "private": true,
-  "description": "DSH-Deck: Electron desktop shell that boots the dsh web host and renders the browser UI.",
+  "description": "DSH-Decktop: Electron desktop shell that boots the dsh web host and renders the browser UI.",
   "type": "commonjs",
   "main": "dist/main.js",
   "license": "MIT",
@@ -22,8 +22,8 @@
     "typescript": "^6.0.3"
   },
   "build": {
-    "appId": "com.dshdeck.desktop",
-    "productName": "DSH-Deck",
+    "appId": "com.justgenius.dshdecktop",
+    "productName": "DSH-Decktop",
     "directories": {
       "output": "release"
     },
