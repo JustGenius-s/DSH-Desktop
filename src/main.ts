@@ -1,5 +1,5 @@
 /**
- * DSH-Deck Electron 主进程。
+ * DSH-Decktop Electron 主进程。
  *
  * 职责：应用就绪后拉起一个 dsh web host 子进程，等它就绪，再开一个
  * BrowserWindow 指向 `http://127.0.0.1:<port>`；退出时负责回收子进程。
@@ -25,7 +25,7 @@ function createWindow(url: string): BrowserWindow {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: 'DSH-Deck',
+    title: 'DSH-Decktop',
     icon: join(app.getAppPath(), 'build', 'icon.png'),
     backgroundColor: '#0d1117',
     show: false,
@@ -72,7 +72,7 @@ function setSplashStatus(win: BrowserWindow, text: string): void {
 }
 
 function reportError(title: string, message: string): void {
-  console.error(`[DSH-Deck] ${title}: ${message}`)
+  console.error(`[DSH-Decktop] ${title}: ${message}`)
   dialog.showErrorBox(title, message)
 }
 
@@ -96,7 +96,7 @@ async function promptUpdateIfAvailable(): Promise<void> {
   try {
     await updateDsh(latest)
   } catch (err) {
-    reportError('DSH-Deck', `更新失败：${err instanceof Error ? err.message : String(err)}`)
+    reportError('DSH-Decktop', `更新失败：${err instanceof Error ? err.message : String(err)}`)
     return
   }
 
@@ -119,7 +119,7 @@ app.whenReady().then(async () => {
   try {
     port = await findFreePort()
   } catch (err) {
-    reportError('DSH-Deck', `无法分配端口：${err instanceof Error ? err.message : String(err)}`)
+    reportError('DSH-Decktop', `无法分配端口：${err instanceof Error ? err.message : String(err)}`)
     app.quit()
     return
   }
@@ -131,7 +131,7 @@ app.whenReady().then(async () => {
     bin = await ensureDshInstalled((message) => setSplashStatus(splash, message))
   } catch (err) {
     splash.close()
-    reportError('DSH-Deck', `无法准备 DSH 运行时：${err instanceof Error ? err.message : String(err)}`)
+    reportError('DSH-Decktop', `无法准备 DSH 运行时：${err instanceof Error ? err.message : String(err)}`)
     app.quit()
     return
   }
@@ -142,7 +142,7 @@ app.whenReady().then(async () => {
     // 主动退出（before-quit 已置 stopping）不弹错误框。
     if (stopping) return
     if (mainWindow && !mainWindow.isDestroyed()) {
-      reportError('DSH-Deck', `DSH 服务意外退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）`)
+      reportError('DSH-Decktop', `DSH 服务意外退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）`)
     }
   })
 
@@ -150,7 +150,7 @@ app.whenReady().then(async () => {
     await waitForReady(port)
   } catch (err) {
     splash.close()
-    reportError('DSH-Deck', err instanceof Error ? err.message : String(err))
+    reportError('DSH-Decktop', err instanceof Error ? err.message : String(err))
     app.quit()
     return
   }

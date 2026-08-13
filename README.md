@@ -1,55 +1,43 @@
 # DSH-Decktop
 
-DeepSeek Harness（DSH）的 Electron 桌面壳：内置 node + pnpm，把 `@deepseek-ai/dsh`
-装到 `~/.dsh/runtime`，启动 `dsh web` 并用浏览器窗口呈现 Web UI。
+Electron desktop shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Bundles node + pnpm, installs `@deepseek-ai/dsh` into `~/.dsh/runtime`, and serves the `dsh web` UI in a browser window.
 
-## 架构
+## How it works
 
 ```
-Electron 主进程 (src/main.ts)
-  ├─ 内置 node + pnpm（打包进 resources/runtime，dev 模式在仓库根 runtime/）
-  ├─ 首启：用内置 pnpm 装 @deepseek-ai/dsh 到 ~/.dsh/runtime（可升级）
-  ├─ spawn  dsh web --host 127.0.0.1 --port <free-port>   (src/dsh-host.ts)
-  └─ BrowserWindow ──加载──▶ http://127.0.0.1:<port>
+Electron main process
+  ├─ bundled node + pnpm (resources/runtime; repo-root runtime/ in dev)
+  ├─ first launch: pnpm installs @deepseek-ai/dsh → ~/.dsh/runtime (upgradeable)
+  ├─ spawn  dsh web --host 127.0.0.1 --port <free-port>
+  └─ BrowserWindow → http://127.0.0.1:<port>
 ```
 
-DSH 本体不随 App 发布，从 npm 动态安装到 `~/.dsh/runtime`。升级 DSH =
-启动时检测新版本 → 弹窗「立即更新」→ 重启，无需重新打包、签名。
+DSH is installed from npm at runtime, not shipped with the app. Upgrading DSH = detect a newer version on launch → click "Update" → restart. No rebuild or re-signing.
 
-## 目录
-
-- `src/` — Electron 主进程：
-  - `main.ts` — 窗口编排、splash、自动检测/手动更新
-  - `dsh-host.ts` — 端口分配、spawn、就绪探测
-  - `runtime-manager.ts` — 内置 node/pnpm 定位、安装/检测/升级 `@deepseek-ai/dsh`
-- `scripts/collect-runtime.mjs` — 打包时下载最新 node + pnpm 到 `runtime/`
-- `build/` — 图标与 splash 页
-- `runtime/` — collect 生成（gitignored），内置 node + pnpm
-
-## 开发运行
-
-开发与打包行为一致：都用内置 node + 外置 `~/.dsh/runtime`。
+## Develop
 
 ```sh
 pnpm install
-pnpm collect       # 下载 node + pnpm 到 runtime/
-pnpm start         # 首启会自动装 @deepseek-ai/dsh（约 1-2 分钟）
+pnpm collect      # download node + pnpm into runtime/
+pnpm start        # first launch installs @deepseek-ai/dsh (~1-2 min)
 ```
 
-## 打包
+Dev and packaged behave identically: both use the bundled node and the external `~/.dsh/runtime`.
+
+## Package
 
 ```sh
-pnpm dist:mac      # macOS dmg + zip
-pnpm dist:win      # Windows nsis + zip（建议在 Windows 机器上执行）
+pnpm dist:mac     # macOS dmg + zip
+pnpm dist:win     # Windows nsis + zip (run on Windows)
 ```
 
-macOS 产物未做 Developer ID 签名与公证，首次打开会被 Gatekeeper 拦截，放行：
+macOS artifacts are unsigned; Gatekeeper blocks first launch. Allow with:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/DSH-Deck.app
+xattr -dr com.apple.quarantine /Applications/DSH-Decktop.app
 ```
 
-## 依赖
+## Runtime dependencies
 
-- 运行时：内置 node（最新）+ pnpm（最新）
-- DSH：`@deepseek-ai/dsh`（npm 最新版，装到 `~/.dsh/runtime`）
+- node (latest) + pnpm (latest), bundled via `scripts/collect-runtime.mjs`
+- `@deepseek-ai/dsh` (npm latest), installed to `~/.dsh/runtime`
