@@ -48,8 +48,8 @@ function createWindow(url: string): BrowserWindow {
 /** 启动/安装期间的 splash 窗口：本地静态页，进度条由 CSS 动画驱动，文字靠主进程更新。 */
 function createSplash(): BrowserWindow {
   const win = new BrowserWindow({
-    width: 480,
-    height: 300,
+    width: 880,
+    height: 600,
     frame: false,
     resizable: false,
     show: false,
