@@ -55,31 +55,64 @@ function createWindow(url: string): BrowserWindow {
 }
 
 /**
- * 隐藏原生标题栏后，把 DSH 侧栏顶部的 logo 行当作“标题栏”拖拽区，并给其中
- * 的交互控件标 `no-drag`，让红绿灯按钮悬浮其上、互不遮挡，窗口仍可拖动。
- * DSH 是运行时升级的 web 包，类名是 hash 过的，故用属性选择器尽量兼容。
+ * 隐藏原生标题栏后恢复窗口拖动热区。分三块，全部用 `-webkit-app-region`：
+ *
+ * 1. 侧栏顶部 logo 行（logoRow）：原有拖拽区，保留；其中按钮/链接标 `no-drag`。
+ * 2. 中间列会话顶栏（ConversationRoot 的 `<header>`）：整行可拖，面包屑、
+ *    标签页、右侧动作按钮全部标 `no-drag`，不影响菜单/按钮功能。
+ * 3. 中间列顶部通条：会话顶栏在 hero/空会话态会隐藏（headerHidden），此时用
+ *    中间列容器（centerCol）的 `::before` 伪元素补一条 40px 高的顶部拖拽带；
+ *    顶栏显示时该伪元素压在其下方，不可点击但可拖动，不遮挡任何交互控件。
+ *
+ * DSH 是运行时升级的 web 包，类名是构建时 hash 的（形如 `wSkVaW_header`），
+ * 故一律用 `[class*='xxx']` 属性选择器匹配稳定的 camelCase 后缀，并用
+ * `!important` 防止运行时注入的样式覆盖。
  */
 async function applyTitleBarChrome(win: BrowserWindow): Promise<void> {
   const wc = win.webContents
   if (wc.isDestroyed()) return
 
-  // 侧栏顶部行（logoRow）作为可拖拽区域；其中的按钮/链接保持可点击。
-  // 红绿灯按钮约占左上角 28px 高，给 logo 行顶部留出空间，避免按钮贴得太近。
-  // DSH 的组件样式在运行时才注入，可能盖过我方样式，故用 !important 强制。
-  // 属性选择器 [class*='logoRow'] 匹配 hash 前缀 + 稳定的 camelCase 类名。
   await wc.insertCSS(`
+    /* ---- 1. 侧栏 logo 行：红绿灯下方保留原有拖拽区 ---- */
     [class*='logoRow'] { -webkit-app-region: drag; margin-top: 20px !important; }
     [class*='logoRow'] button,
     [class*='logoRow'] a,
     [class*='logoRow'] [role='button'] { -webkit-app-region: no-drag; }
 
-    /* logo 行上方因 margin-top 留出的空隙：用伪元素做成顶部可拖拽条，恢复窗口拖动/双击热区 */
+    /* logo 行上方因 margin-top 留出的空隙：伪元素补成顶部拖拽带 */
     :has(> [class*='logoRow']) { position: relative; }
     :has(> [class*='logoRow'])::before {
       content: '';
       position: absolute;
       top: 0; left: 0; right: 0;
       height: 40px;
+      -webkit-app-region: drag;
+    }
+
+    /* ---- 2. 中间列会话顶栏：整行可拖，交互控件除外 ----
+       整个应用只有会话顶栏渲染 <header> 元素（详情面板等均为 div），
+       故直接用元素选择器；headerHidden 时 display:none，规则自然失效。 */
+    header[class*='header']:not([class*='headerHidden']) {
+      -webkit-app-region: drag;
+    }
+    header[class*='header'] button,
+    header[class*='header'] a,
+    header[class*='header'] [role='button'],
+    header[class*='header'] [role='tab'],
+    header[class*='header'] input,
+    header[class*='header'] select {
+      -webkit-app-region: no-drag;
+    }
+
+    /* ---- 3. 中间列顶部通条：顶栏隐藏时（hero/空会话态）仍可拖动 ----
+       伪元素压在顶栏/内容下层（z-index:0），不可点击但可拖动，不遮挡交互控件。 */
+    [class*='centerCol'] { position: relative; }
+    [class*='centerCol']::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 40px;
+      z-index: 0;
       -webkit-app-region: drag;
     }
   `).catch(() => {})
