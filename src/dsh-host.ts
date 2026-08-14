@@ -41,7 +41,7 @@ export function startDsh(port: number, bin: string): ChildProcess {
   const env: NodeJS.ProcessEnv = withBundledBinPath({ ...process.env })
   const args = [bin, 'web', '--host', DSH_HOST, '--port', String(port)]
 
-  const child = spawn(bundledNodeBin(), args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(bundledNodeBin(), args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
 
   // 把 dsh 的日志透传到 Electron 的 stdout/stderr，方便排查。
   child.stdout?.on('data', (chunk: Buffer) => process.stdout.write(`[dsh] ${chunk.toString()}`))

@@ -76,14 +76,11 @@ async function applyTitleBarChrome(win: BrowserWindow): Promise<void> {
   const wc = win.webContents
   if (wc.isDestroyed()) return
 
-  await wc.insertCSS(`
-    /* ---- 1. 侧栏 logo 行：红绿灯下方保留原有拖拽区 ---- */
+  const isMac = process.platform === 'darwin'
+  // Windows 有原生标题栏，侧栏不必为红绿灯再留上边距。
+  const macSidebarInset = isMac
+    ? `
     [class*='logoRow'] { -webkit-app-region: drag; margin-top: 20px !important; }
-    [class*='logoRow'] button,
-    [class*='logoRow'] a,
-    [class*='logoRow'] [role='button'] { -webkit-app-region: no-drag; }
-
-    /* logo 行上方因 margin-top 留出的空隙：伪元素补成顶部拖拽带 */
     :has(> [class*='logoRow']) { position: relative; }
     :has(> [class*='logoRow'])::before {
       content: '';
@@ -91,7 +88,16 @@ async function applyTitleBarChrome(win: BrowserWindow): Promise<void> {
       top: 0; left: 0; right: 0;
       height: 40px;
       -webkit-app-region: drag;
-    }
+    }`
+    : `
+    [class*='logoRow'] { -webkit-app-region: drag; }`
+
+  await wc.insertCSS(`
+    /* ---- 1. 侧栏 logo 行：macOS 为红绿灯留白；Windows 贴顶 ---- */
+    ${macSidebarInset}
+    [class*='logoRow'] button,
+    [class*='logoRow'] a,
+    [class*='logoRow'] [role='button'] { -webkit-app-region: no-drag; }
 
     /* ---- 2. 中间列会话顶栏：整行可拖，交互控件除外 ----
        整个应用只有会话顶栏渲染 <header> 元素（详情面板等均为 div），
