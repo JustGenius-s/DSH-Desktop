@@ -1,8 +1,12 @@
-# <img src="../build/icon-app.png" width="128" alt="DSH-Desktop 应用图标" />
+<p align="center">
+  <img src="../build/icon-app.png" width="128" alt="DSH-Desktop 应用图标" />
+</p>
 
-# <img src="../build/icon.png" width="32" alt="DSH-Desktop" /> DSH-Desktop
+<p align="center">
+  <a href="../README.md">English</a> ｜ <strong>简体中文</strong>
+</p>
 
-> [English](../README.md)
+<h1 align="center">DSH-Desktop</h1>
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的 Electron 桌面外壳。内置 node + pnpm，把 `@deepseek-ai/dsh` 安装到 `~/.dsh/runtime`，并在浏览器窗口中运行 `dsh web` 界面。
 

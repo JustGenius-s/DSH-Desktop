@@ -2,9 +2,11 @@
   <img src="build/icon-app.png" width="128" alt="DSH-Desktop app icon" />
 </p>
 
-# <img src="build/icon.png" width="32" alt="DSH-Desktop" /> DSH-Desktop
+<p align="center">
+  <strong>English</strong> ｜ <a href="docs/README.zh-CN.md">简体中文</a>
+</p>
 
-**[中文文档](docs/README.zh-CN.md)**
+<h1 align="center">DSH-Desktop</h1>
 
 Electron desktop shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Bundles node + pnpm, installs `@deepseek-ai/dsh` into `~/.dsh/runtime`, and serves the `dsh web` UI in a browser window.
 
