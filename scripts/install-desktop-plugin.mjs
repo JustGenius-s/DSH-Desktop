@@ -105,19 +105,37 @@ function run(cmd, cmdArgs, timeoutMs) {
 function pnpm(pnpmArgs, timeoutMs) {
   return run(nodeBin, [pnpmCjs, ...pnpmArgs], timeoutMs)
 }
-
+/** 解析 semver：返回 [major, minor, patch, prerelease 数组]（无 prerelease 为空数组）。 */
 function parseVersion(v) {
-  return String(v).replace(/^[vV]/, '').split('.').slice(0, 3).map((p) => {
-    const n = Number.parseInt(p, 10)
-    return Number.isNaN(n) ? 0 : n
-  })
+  const m = /^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(String(v).trim())
+  if (m === null) return [0, 0, 0, []]
+  const pre = m[4] === undefined ? [] : m[4].split('.')
+  return [Number(m[1]), Number(m[2]), Number(m[3]), pre]
 }
 
+/** semver 比较（含 prerelease 规则：有 prerelease < 同版本正式版；逐段数值/字典序）。 */
 function compareVersions(a, b) {
-  const pa = parseVersion(a)
-  const pb = parseVersion(b)
-  for (let i = 0; i < 3; i++) {
-    if (pa[i] !== pb[i]) return pa[i] - pb[i]
+  const [aMaj, aMin, aPat, aPre] = parseVersion(a)
+  const [bMaj, bMin, bPat, bPre] = parseVersion(b)
+  for (const [x, y] of [[aMaj, bMaj], [aMin, bMin], [aPat, bPat]]) {
+    if (x !== y) return x - y
+  }
+  if (aPre.length === 0 && bPre.length === 0) return 0
+  if (aPre.length === 0) return 1 // 正式版 > 任何 prerelease
+  if (bPre.length === 0) return -1
+  for (let i = 0; i < Math.max(aPre.length, bPre.length); i++) {
+    const x = aPre[i]
+    const y = bPre[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    const xn = Number(x)
+    const yn = Number(y)
+    const xIsNum = !Number.isNaN(xn) && /^\d+$/.test(x)
+    const yIsNum = !Number.isNaN(yn) && /^\d+$/.test(y)
+    if (xIsNum && yIsNum) { if (xn !== yn) return xn - yn; continue }
+    if (xIsNum) return -1
+    if (yIsNum) return 1
+    if (x !== y) return x < y ? -1 : 1
   }
   return 0
 }
