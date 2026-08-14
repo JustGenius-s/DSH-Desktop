@@ -11,9 +11,10 @@
 
 import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import { DSH_HOST, findFreePort, startDsh, waitForReady } from './dsh-host'
 import { ensureDshInstalled, installedDshVersion, latestDshVersion, updateDsh } from './runtime-manager'
+import { checkForAppUpdate, dismissAppUpdate } from './app-updater'
 
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
@@ -150,7 +151,7 @@ function reportError(title: string, message: string): void {
 }
 
 /** 自动检测 DSH 新版本；命中则弹窗，由用户手动触发升级。 */
-async function promptUpdateIfAvailable(): Promise<void> {
+async function promptDshUpdateIfAvailable(): Promise<void> {
   const installed = installedDshVersion()
   if (installed === undefined) return
   const latest = await latestDshVersion()
@@ -184,6 +185,26 @@ async function promptUpdateIfAvailable(): Promise<void> {
   if (restart === 0) {
     app.relaunch()
     app.quit()
+  }
+}
+
+/** 检测应用本体新版本；命中则弹窗提示下载（打开 Releases 页面）。 */
+async function promptAppUpdateIfAvailable(): Promise<void> {
+  const info = await checkForAppUpdate()
+  if (info === undefined) return
+
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    title: 'DSH-Desktop 更新',
+    message: `发现新版本 ${info.latest}（当前 ${info.current}）。`,
+    buttons: ['下载', '稍后'],
+    defaultId: 0,
+    cancelId: 1,
+  })
+  if (response === 0) {
+    void shell.openExternal(info.url)
+  } else {
+    dismissAppUpdate(info.latest)
   }
 }
 
@@ -231,7 +252,12 @@ app.whenReady().then(async () => {
   splash.close()
   mainWindow = createWindow(`http://${DSH_HOST}:${port}`)
 
-  if (app.isPackaged) void promptUpdateIfAvailable()
+  if (app.isPackaged) {
+    void (async () => {
+      await promptDshUpdateIfAvailable()
+      await promptAppUpdateIfAvailable()
+    })()
+  }
 })
 
 app.on('before-quit', () => {
