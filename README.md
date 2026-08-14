@@ -1,4 +1,4 @@
-# DSH-Decktop
+# DSH-Desktop
 
 Electron desktop shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Bundles node + pnpm, installs `@deepseek-ai/dsh` into `~/.dsh/runtime`, and serves the `dsh web` UI in a browser window.
 
@@ -34,7 +34,7 @@ pnpm dist:win     # Windows nsis + zip (run on Windows)
 macOS artifacts are unsigned; Gatekeeper blocks first launch. Allow with:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/DSH-Decktop.app
+xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 ```
 
 ## Runtime dependencies

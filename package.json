@@ -1,8 +1,8 @@
 {
-  "name": "dsh-decktop",
+  "name": "dsh-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "DSH-Decktop: Electron desktop shell that boots the dsh web host and renders the browser UI.",
+  "description": "DSH-Desktop: Electron desktop shell that boots the dsh web host and renders the browser UI.",
   "type": "commonjs",
   "main": "dist/main.js",
   "license": "MIT",
@@ -22,8 +22,8 @@
     "typescript": "^6.0.3"
   },
   "build": {
-    "appId": "com.justgenius.dshdecktop",
-    "productName": "DSH-Decktop",
+    "appId": "com.justgenius.dshdesktop",
+    "productName": "DSH-Desktop",
     "directories": {
       "output": "release"
     },
