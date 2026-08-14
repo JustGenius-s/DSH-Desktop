@@ -62,5 +62,14 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 - node (latest) + pnpm (latest), bundled via `scripts/collect-runtime.mjs`
 - `@deepseek-ai/dsh` (npm latest), installed to `~/.dsh/runtime`
 
+## Assets
+
+| File | Purpose |
+| --- | --- |
+| `build/icon-app.png` | macOS app icon: deep-blue gradient (`#4a8ac4` → `#2d5f9e` → `#1a3870`, splash-page palette) + white whale, rounded corners |
+| `build/icon.icns` | Multi-size mac iconset (16-1024, Retina @2x) built from `icon-app.png` via `iconutil` |
+| `build/icon.png` | In-app icon without background — BrowserWindow (`src/main.ts`), splash page, README |
+| `build/icon.ico` | Windows app icon (same deep-blue design, multi-size 16–256) |
+
 ## Thanks to
 - [Linux do](https://linux.do/)

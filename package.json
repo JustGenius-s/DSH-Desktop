@@ -30,6 +30,7 @@
     "files": [
       "dist/**/*",
       "package.json",
+      "build/icon-app.png",
       "build/icon.png",
       "build/splash.html"
     ],
@@ -44,9 +45,9 @@
       }
     ],
     "asar": true,
-    "icon": "build/icon.png",
+    "icon": "build/icon-app.png",
     "mac": {
-      "icon": "build/icon.png",
+      "icon": "build/icon.icns",
       "category": "public.app-category.developer-tools",
       "target": [
         "dmg",
