@@ -1,12 +1,12 @@
 /**
  * 应用本体更新检测：查 GitHub Releases 是否有比当前版本更新的发布。
- * 命中返回更新信息，由 main.ts 弹窗提示下载。与 DSH 运行时升级
- * （runtime-manager.ts 管 `@deepseek-ai/dsh` 包）是两回事——这里只管
- * 桌面 App 自己，只做「检测 + 提示跳下载」，不做静默自动安装。
+ * 检测结果由 desktop-bridge.ts 聚合并经 preload 暴露给网页（更新徽章）。
+ * 与 DSH 运行时升级（runtime-manager.ts 管 `@deepseek-ai/dsh` 包）是两回事
+ * ——这里只管桌面 App 自己，只做「检测 + 提示跳下载」，不做静默自动安装。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { app } from 'electron'
 
 /**
@@ -53,28 +53,19 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
-/** 记录「用户已关闭更新提示」的标记：写入后任何新版本都不再弹窗。 */
+/** 「跳过该版本」记录：命中后该 latest 不再提示，出现更新的版本自动恢复。
+ *  由 desktop-bridge.ts 读写；旧版永久「不再提示」的标记文件也在这里识别，
+ *  视为跳过一切版本（尊重老用户的选择）。 */
 function skipFilePath(): string {
   return join(app.getPath('userData'), 'app-update-skip.json')
 }
 
-/** 用户是否已选择「不再提示」应用更新。 */
-export function appUpdateDismissed(): boolean {
+function legacyDismissed(): boolean {
   try {
     const obj = JSON.parse(readFileSync(skipFilePath(), 'utf8')) as { dismissed?: unknown }
     return obj.dismissed === true
   } catch {
     return false
-  }
-}
-
-/** 用户点「不再提示」时调用，永久关闭应用更新弹窗（删掉该文件可恢复）。 */
-export function dismissAppUpdate(): void {
-  try {
-    mkdirSync(dirname(skipFilePath()), { recursive: true })
-    writeFileSync(skipFilePath(), JSON.stringify({ dismissed: true }, null, 2) + '\n')
-  } catch {
-    // 写失败无妨：最坏只是下次启动再提示一次。
   }
 }
 
@@ -104,9 +95,9 @@ export async function latestAppRelease(): Promise<{ version: string; url: string
   }
 }
 
-/** 检测是否有比当前更新的版本；用户已关闭提示、没有更新或失败返回 undefined。 */
+/** 检测是否有比当前更新的版本；老用户曾选「不再提示」、没有更新或失败返回 undefined。 */
 export async function checkForAppUpdate(): Promise<AppUpdateInfo | undefined> {
-  if (appUpdateDismissed()) return undefined
+  if (legacyDismissed()) return undefined
   const release = await latestAppRelease()
   if (release === undefined) return undefined
 

@@ -13,8 +13,9 @@ import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, shell } from 'electron'
 import { DSH_HOST, findFreePort, startDsh, waitForReady } from './dsh-host'
-import { ensureDshInstalled, installedDshVersion, latestDshVersion, updateDsh } from './runtime-manager'
-import { checkForAppUpdate, dismissAppUpdate } from './app-updater'
+import { ensureDshInstalled } from './runtime-manager'
+import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
+import { installDesktopPlugin } from './plugin-installer'
 
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
@@ -39,6 +40,8 @@ function createWindow(url: string): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 向 DSH 网页暴露 window.dshDesktop（更新状态查询/操作），preload 自身零依赖。
+      preload: join(__dirname, 'preload.js'),
     },
   })
 
@@ -150,65 +153,6 @@ function reportError(title: string, message: string): void {
   dialog.showErrorBox(title, message)
 }
 
-/** 自动检测 DSH 新版本；命中则弹窗，由用户手动触发升级。 */
-async function promptDshUpdateIfAvailable(): Promise<void> {
-  const installed = installedDshVersion()
-  if (installed === undefined) return
-  const latest = await latestDshVersion()
-  if (latest === undefined || latest === installed) return
-
-  const { response } = await dialog.showMessageBox({
-    type: 'info',
-    title: 'DSH 更新',
-    message: `检测到 DSH 新版本 ${latest}（当前 ${installed}）。`,
-    buttons: ['立即更新', '稍后'],
-    defaultId: 0,
-    cancelId: 1,
-  })
-  if (response !== 0) return
-
-  try {
-    await updateDsh(latest)
-  } catch (err) {
-    reportError('DSH-Desktop', `更新失败：${err instanceof Error ? err.message : String(err)}`)
-    return
-  }
-
-  const { response: restart } = await dialog.showMessageBox({
-    type: 'info',
-    title: 'DSH 更新',
-    message: `已更新到 ${latest}，重启应用生效。`,
-    buttons: ['立即重启', '稍后'],
-    defaultId: 0,
-    cancelId: 1,
-  })
-  if (restart === 0) {
-    app.relaunch()
-    app.quit()
-  }
-}
-
-/** 检测应用本体新版本；命中则弹窗提示下载（打开 Releases 页面）。 */
-async function promptAppUpdateIfAvailable(): Promise<void> {
-  const info = await checkForAppUpdate()
-  if (info === undefined) return
-
-  // 「稍后」不记录任何东西，下次启动照常提示；「不再提示」永久关闭更新弹窗。
-  const { response } = await dialog.showMessageBox({
-    type: 'info',
-    title: 'DSH-Desktop 更新',
-    message: `发现新版本 ${info.latest}（当前 ${info.current}）。`,
-    buttons: ['下载', '稍后', '不再提示'],
-    defaultId: 0,
-    cancelId: 1,
-  })
-  if (response === 0) {
-    void shell.openExternal(info.url)
-  } else if (response === 2) {
-    dismissAppUpdate()
-  }
-}
-
 app.whenReady().then(async () => {
   let port: number
   try {
@@ -253,12 +197,14 @@ app.whenReady().then(async () => {
   splash.close()
   mainWindow = createWindow(`http://${DSH_HOST}:${port}`)
 
-  if (app.isPackaged) {
-    void (async () => {
-      await promptDshUpdateIfAvailable()
-      await promptAppUpdateIfAvailable()
-    })()
-  }
+  // 更新检查改为后台静默进行：桌面桥负责检测 + 轮询 + 通过 preload 暴露给
+  // 网页；dsh-desktop-update 插件（由安装脚本装进 web profile）在侧栏设置
+  // 按钮旁渲染更新徽章。安装脚本与首查都不阻塞窗口出现，失败只记日志。
+  setupDesktopBridge()
+  void (async () => {
+    await installDesktopPlugin()
+    await checkDesktopUpdates()
+  })()
 })
 
 app.on('before-quit', () => {
