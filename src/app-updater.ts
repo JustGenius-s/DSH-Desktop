@@ -53,25 +53,26 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
-/** 记录「用户已跳过」的版本，避免每次启动都重复弹窗。 */
+/** 记录「用户已关闭更新提示」的标记：写入后任何新版本都不再弹窗。 */
 function skipFilePath(): string {
   return join(app.getPath('userData'), 'app-update-skip.json')
 }
 
-function skippedAppVersion(): string | undefined {
+/** 用户是否已选择「不再提示」应用更新。 */
+export function appUpdateDismissed(): boolean {
   try {
-    const obj = JSON.parse(readFileSync(skipFilePath(), 'utf8')) as { version?: unknown }
-    return typeof obj.version === 'string' ? obj.version : undefined
+    const obj = JSON.parse(readFileSync(skipFilePath(), 'utf8')) as { dismissed?: unknown }
+    return obj.dismissed === true
   } catch {
-    return undefined
+    return false
   }
 }
 
-/** 用户点「稍后」时调用，记住该版本，下次启动不再提示。 */
-export function dismissAppUpdate(version: string): void {
+/** 用户点「不再提示」时调用，永久关闭应用更新弹窗（删掉该文件可恢复）。 */
+export function dismissAppUpdate(): void {
   try {
     mkdirSync(dirname(skipFilePath()), { recursive: true })
-    writeFileSync(skipFilePath(), JSON.stringify({ version }, null, 2) + '\n')
+    writeFileSync(skipFilePath(), JSON.stringify({ dismissed: true }, null, 2) + '\n')
   } catch {
     // 写失败无妨：最坏只是下次启动再提示一次。
   }
@@ -103,14 +104,14 @@ export async function latestAppRelease(): Promise<{ version: string; url: string
   }
 }
 
-/** 检测是否有比当前更新、且未被用户跳过的版本；没有或失败返回 undefined。 */
+/** 检测是否有比当前更新的版本；用户已关闭提示、没有更新或失败返回 undefined。 */
 export async function checkForAppUpdate(): Promise<AppUpdateInfo | undefined> {
+  if (appUpdateDismissed()) return undefined
   const release = await latestAppRelease()
   if (release === undefined) return undefined
 
   const current = normalizeVersion(app.getVersion())
   if (compareVersions(release.version, current) <= 0) return undefined
-  if (release.version === skippedAppVersion()) return undefined
 
   return { current, latest: release.version, url: release.url }
 }

@@ -193,18 +193,19 @@ async function promptAppUpdateIfAvailable(): Promise<void> {
   const info = await checkForAppUpdate()
   if (info === undefined) return
 
+  // 「稍后」不记录任何东西，下次启动照常提示；「不再提示」永久关闭更新弹窗。
   const { response } = await dialog.showMessageBox({
     type: 'info',
     title: 'DSH-Desktop 更新',
     message: `发现新版本 ${info.latest}（当前 ${info.current}）。`,
-    buttons: ['下载', '稍后'],
+    buttons: ['下载', '稍后', '不再提示'],
     defaultId: 0,
     cancelId: 1,
   })
   if (response === 0) {
     void shell.openExternal(info.url)
-  } else {
-    dismissAppUpdate(info.latest)
+  } else if (response === 2) {
+    dismissAppUpdate()
   }
 }
 
