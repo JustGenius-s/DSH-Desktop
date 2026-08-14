@@ -41,3 +41,6 @@ xattr -dr com.apple.quarantine /Applications/DSH-Decktop.app
 
 - node (latest) + pnpm (latest), bundled via `scripts/collect-runtime.mjs`
 - `@deepseek-ai/dsh` (npm latest), installed to `~/.dsh/runtime`
+
+## Thanks to
+- [Linux do](https://linux.do/)
