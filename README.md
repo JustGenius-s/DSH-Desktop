@@ -2,6 +2,26 @@
 
 Electron desktop shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Bundles node + pnpm, installs `@deepseek-ai/dsh` into `~/.dsh/runtime`, and serves the `dsh web` UI in a browser window.
 
+## Download & Install
+
+Prebuilt packages are published on [GitHub Releases](https://github.com/JustGenius-s/DSH-Desktop/releases). First launch installs the DSH runtime (~1-2 min).
+
+### macOS
+
+1. Download `DSH-Desktop-*.dmg` from the latest release.
+2. Open the `.dmg` and drag `DSH-Desktop.app` into `/Applications`.
+3. The app is unsigned, so Gatekeeper blocks the first launch. Right-click the app → **Open** and confirm, or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
+```
+
+### Windows
+
+1. Download `DSH-Desktop Setup *.exe` (installer) or `DSH-Desktop-*-win.zip` (portable) from the latest release.
+2. Run the installer, or unzip the archive and launch `DSH-Desktop.exe`.
+3. The build is unsigned, so SmartScreen may warn. Click **More info** → **Run anyway**.
+
 ## How it works
 
 ```
