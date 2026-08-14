@@ -2,11 +2,12 @@
 /**
  * dsh-desktop-update 插件安装/卸载脚本（由 Electron 主进程调用，也可手动跑）。
  *
- * 安装策略：本地源码安装（当前阶段）——从 DSH-Plugs 工作副本复制预构建
- * 产物（lib/ 由维护者 pnpm build 生成），装进 <DSH_HOME>/plugins/desktop-update/。
- * npm 路线（installFromNpm）保留但暂不接主流程，等插件正式发布后再切。
- *   1. --source 指定插件源码目录（主进程按开发/打包环境解析默认位置）；
- *   2. 得到带 lib/index.js + lib/client.js 的插件目录后，向
+ * 安装策略：仅 npm——插件的唯一分发渠道是 npm registry。
+ *   1. 查 npm registry 上 @just-genius/dsh-desktop-update 的最新版本；
+ *      有则用内置 node+pnpm 把它装进 <DSH_HOME>/plugins/desktop-update/；
+ *   2. 包尚未发布（404）则正常退出、什么都不装——下次启动重试，发布后
+ *      用户重启 App 即自动装上；
+ *   3. 得到带 lib/index.js + lib/client.js 的插件目录后，向
  *      ~/.dsh/profiles/web/package.json 注册（bundles + dependencies link:），
  *      并在 profile 下跑一次 pnpm install：bundle 解析走 Node 的
  *      node_modules 向上查找（resolveBundleDir），link: 条目只是元数据，
@@ -17,7 +18,7 @@
  * 全部操作幂等：重复执行结果一致，中途失败留下可重试的状态。
  *
  * 用法：
- *   node install-desktop-plugin.mjs install --source <插件源码目录> [--home <DSH_HOME>]
+ *   node install-desktop-plugin.mjs install [--home <DSH_HOME>]
  *   node install-desktop-plugin.mjs uninstall [--home <DSH_HOME>]
  *
  * 退出码：0 成功/已到位/包未发布跳过；1 失败（消息在 stderr，主进程记日志即可）。
@@ -26,7 +27,7 @@
 import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PLUGIN_NAME = '@just-genius/dsh-desktop-update'
@@ -55,7 +56,7 @@ function fail(message) {
 }
 
 if (command !== 'install' && command !== 'uninstall') {
-  fail('用法: install-desktop-plugin.mjs install --source <dir> [--home <dir>] | uninstall [--home <dir>]')
+  fail('用法: install-desktop-plugin.mjs install|uninstall [--home <dir>]')
 }
 
 const dshHome = opt('home') ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
@@ -105,40 +106,22 @@ function pnpm(pnpmArgs, timeoutMs) {
   return run(nodeBin, [pnpmCjs, ...pnpmArgs], timeoutMs)
 }
 
-/** 解析 semver：返回 [major, minor, patch, prerelease 数组]（无 prerelease 为空数组）。 */
 function parseVersion(v) {
-  const m = /^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(String(v).trim())
-  if (m === null) return [0, 0, 0, []]
-  const pre = m[4] === undefined ? [] : m[4].split('.')
-  return [Number(m[1]), Number(m[2]), Number(m[3]), pre]
+  return String(v).replace(/^[vV]/, '').split('.').slice(0, 3).map((p) => {
+    const n = Number.parseInt(p, 10)
+    return Number.isNaN(n) ? 0 : n
+  })
 }
 
-/** semver 比较（含 prerelease 规则：有 prerelease < 同版本正式版；逐段数值/字典序）。 */
 function compareVersions(a, b) {
-  const [aMaj, aMin, aPat, aPre] = parseVersion(a)
-  const [bMaj, bMin, bPat, bPre] = parseVersion(b)
-  for (const [x, y] of [[aMaj, bMaj], [aMin, bMin], [aPat, bPat]]) {
-    if (x !== y) return x - y
-  }
-  if (aPre.length === 0 && bPre.length === 0) return 0
-  if (aPre.length === 0) return 1 // 正式版 > 任何 prerelease
-  if (bPre.length === 0) return -1
-  for (let i = 0; i < Math.max(aPre.length, bPre.length); i++) {
-    const x = aPre[i]
-    const y = bPre[i]
-    if (x === undefined) return -1
-    if (y === undefined) return 1
-    const xn = Number(x)
-    const yn = Number(y)
-    const xIsNum = !Number.isNaN(xn) && /^\d+$/.test(x)
-    const yIsNum = !Number.isNaN(yn) && /^\d+$/.test(y)
-    if (xIsNum && yIsNum) { if (xn !== yn) return xn - yn; continue }
-    if (xIsNum) return -1
-    if (yIsNum) return 1
-    if (x !== y) return x < y ? -1 : 1
+  const pa = parseVersion(a)
+  const pb = parseVersion(b)
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i]
   }
   return 0
 }
+
 /** 已安装且构建完整的插件版本；未安装/不完整返回 undefined。 */
 function installedPluginVersion() {
   try {
@@ -256,28 +239,6 @@ async function materializeProfileLinks() {
   await pnpm(['--dir', profileDir, 'install', '--no-frozen-lockfile', '--prefer-offline'], 180_000)
 }
 
-/** 本地源码路线：从工作副本复制预构建产物（要求维护者已在该目录 pnpm build）。
- *  安装目录不含 node_modules、不需要构建——纯静态文件，Loader 直接解析；
- *  client bundle 只 require react 等 shell 种子模块，host 依赖由 linkHostDeps 补。 */
-async function installFromSource(sourceDir) {
-  const src = resolve(sourceDir)
-  if (!existsSync(join(src, 'package.json'))) {
-    throw new Error('源码目录无效（' + src + '）：缺 package.json')
-  }
-  if (!existsSync(join(src, 'lib', 'client.js')) || !existsSync(join(src, 'lib', 'index.js'))) {
-    throw new Error('源码目录未构建（' + src + '/lib 缺失）——请先在插件仓库运行 pnpm build')
-  }
-  const srcPkg = JSON.parse(readFileSync(join(src, 'package.json'), 'utf8'))
-  if (srcPkg.name !== PLUGIN_NAME) throw new Error('源码目录包名 ' + srcPkg.name + ' 不是 ' + PLUGIN_NAME)
-  rmSync(installDir, { recursive: true, force: true })
-  mkdirSync(pluginsDir, { recursive: true })
-  cpSync(src, installDir, {
-    recursive: true,
-    filter: (p) => !p.includes('node_modules') && !p.includes('.git') && !p.endsWith('.tsbuildinfo'),
-  })
-  return typeof srcPkg.version === 'string' ? srcPkg.version : '0.0.0'
-}
-
 /** 为安装目录补 host 半侧的运行时依赖符号链接。
  *  插件被复制到 <DSH_HOME>/plugins/desktop-update 后脱离原工作区，其
  *  dependencies（@deepseek-ai/dsh-settings、@deepseek-ai/schemastery 等）
@@ -326,12 +287,19 @@ try {
     process.exit(0)
   }
 
-  const sourceDir = opt('source')
-  if (sourceDir === undefined) {
-    fail('本地安装模式需要 --source <插件源码目录>（DSH-Plugs 工作副本）')
+  const latest = await latestPluginVersion()
+  if (latest === undefined) {
+    // 包尚未发布（或 registry 暂不可达）：不算失败——下次启动重试，发布后自动装上。
+    console.log('[install-desktop-plugin] npm 上尚无 ' + PLUGIN_NAME + '，跳过安装（下次启动重试）')
+    process.exit(0)
   }
-  console.log('[install-desktop-plugin] 从源码安装：' + sourceDir)
-  const version = await installFromSource(sourceDir)
+  if (compareVersions(latest, REQUIRED_VERSION) < 0) {
+    console.log('[install-desktop-plugin] npm 最新版 ' + latest + ' 低于要求的 ' + REQUIRED_VERSION + '，跳过安装')
+    process.exit(0)
+  }
+
+  console.log('[install-desktop-plugin] 从 npm 安装 ' + PLUGIN_NAME + '@' + latest + ' …')
+  const version = await installFromNpm(latest)
 
   setRegistration(true)
   await materializeProfileLinks()
