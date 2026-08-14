@@ -9,8 +9,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 
-/** GitHub Releases 的 latest 接口（未认证，有 60 次/小时/来源 IP 的限流）。 */
-const RELEASES_URL = 'https://api.github.com/repos/JustGenius-s/DSH-Desktop/releases/latest'
+/**
+ * GitHub Releases 的 latest 网页地址（非 REST API）。它 302 跳转到
+ * `/releases/tag/vX.Y.Z`，从 Location 头即可解析版本号。
+ * 不用 `api.github.com` 的原因：REST API 未认证限流 60 次/小时/来源 IP，
+ * 企业 NAT / 共享出口下容易被打满导致检测静默失败；网页端点无此限制，
+ * 行为一致（draft 404、prerelease 不算 latest）。
+ */
+const RELEASES_URL = 'https://github.com/JustGenius-s/DSH-Desktop/releases/latest'
 
 /** 一个更新提示结果：当前版本、最新版本、下载入口（Releases 页面）。 */
 export interface AppUpdateInfo {
@@ -71,24 +77,25 @@ export function dismissAppUpdate(version: string): void {
   }
 }
 
-/** 查 GitHub 最新发布；网络失败 / 限流 / 非预期响应都静默返回 undefined。 */
+/** 查 GitHub 最新发布；网络失败 / 无 release（404）/ 非预期响应都静默返回 undefined。 */
 export async function latestAppRelease(): Promise<{ version: string; url: string } | undefined> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10_000)
   try {
+    // redirect:'manual' 拿到 302 的 Location，不跟随跳转（省一次整页下载）。
     const res = await fetch(RELEASES_URL, {
       signal: controller.signal,
-      headers: {
-        'User-Agent': 'DSH-Desktop',
-        Accept: 'application/vnd.github+json',
-      },
+      redirect: 'manual',
+      headers: { 'User-Agent': 'DSH-Desktop' },
     })
-    if (!res.ok) return undefined
-    const body = (await res.json()) as { tag_name?: unknown; html_url?: unknown }
-    const version = typeof body.tag_name === 'string' ? normalizeVersion(body.tag_name) : undefined
-    const url = typeof body.html_url === 'string' ? body.html_url : undefined
-    if (version === undefined || url === undefined) return undefined
-    return { version, url }
+    // 无 release 时该地址直接 404（不跳转），视为没有更新。
+    if (res.status !== 302 && res.status !== 301) return undefined
+    const location = res.headers.get('location')
+    if (location === null) return undefined
+    // Location 形如 https://github.com/<owner>/<repo>/releases/tag/vX.Y.Z
+    const tag = /\/releases\/tag\/([^/?#]+)/.exec(location)?.[1]
+    if (tag === undefined) return undefined
+    return { version: normalizeVersion(decodeURIComponent(tag)), url: location }
   } catch {
     return undefined
   } finally {
