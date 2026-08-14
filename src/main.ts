@@ -175,6 +175,12 @@ app.whenReady().then(async () => {
     return
   }
 
+  // profile 已把插件写进 bundles 但 node_modules 链接缺失时，dsh 会在
+  // loadProfile 阶段直接抛错。必须在 startDsh 之前修链接；profile 尚未
+  // 初始化（首启）则安装脚本会跳过，等 host 就绪后再装一次。
+  setSplashStatus(splash, '正在检查桌面插件…')
+  await installDesktopPlugin()
+
   setSplashStatus(splash, '正在启动 DSH 服务…')
   dshProcess = startDsh(port, bin)
   dshProcess.on('exit', (code, signal) => {

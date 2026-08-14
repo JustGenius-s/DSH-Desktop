@@ -13,8 +13,9 @@ import { bundledNodeBin } from './runtime-manager'
 /**
  * 安装/修复 dsh-desktop-update 插件。成功或「包未发布跳过」返回 true；
  * 脚本执行失败记日志并返回 false。
- * 注意：脚本依赖 ~/.dsh/profiles/web（由 dsh web 首次启动初始化），
- * 因此本函数必须在 DSH host 就绪之后调用。
+ * 注意：profile 尚未初始化时脚本会跳过（首启由 dsh 创建 profile 后再
+ * 调一次）。profile 已存在时必须在 startDsh 之前调用：bundles 已登记
+ * 但 node_modules 链接缺失会让 dsh 在 loadProfile 阶段直接退出。
  */
 export async function installDesktopPlugin(): Promise<boolean> {
   const script = app.isPackaged

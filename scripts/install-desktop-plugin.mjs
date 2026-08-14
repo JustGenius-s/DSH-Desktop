@@ -11,8 +11,10 @@
  *      ~/.dsh/profiles/web/package.json 注册（bundles + dependencies link:），
  *      并在 profile 下跑一次 pnpm install：bundle 解析走 Node 的
  *      node_modules 向上查找（resolveBundleDir），link: 条目只是元数据，
- *      必须物化成 profile node_modules 里的符号链接才会被解析到；最后为
- *      插件安装目录补 host 半侧运行时依赖的符号链接。
+ *      必须物化成 profile node_modules 里的符号链接才会被解析到。
+ *      pnpm 在 lockfile 已同步时可能跳过补链，因此物化后再直接确保
+ *      符号链接存在；补不上则注销登记，避免 dsh 启动期解析失败。
+ *      最后为插件安装目录补 host 半侧运行时依赖的符号链接。
  *
  * 卸载只做注册移除；插件文件保留，重新安装时秒回。
  * 全部操作幂等：重复执行结果一致，中途失败留下可重试的状态。
@@ -27,7 +29,7 @@
 import { spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PLUGIN_NAME = '@just-genius/dsh-desktop-update'
@@ -244,6 +246,25 @@ function setRegistration(enabled) {
   return true // 发生了变更
 }
 
+/** profile node_modules 里插件符号链接的目录。 */
+function profileLinkDir() {
+  return join(dshHome, 'profiles', 'web', 'node_modules', ...PLUGIN_NAME.split('/'))
+}
+
+function profileLinkWorks() {
+  return existsSync(join(profileLinkDir(), 'package.json'))
+}
+
+function isRegistered() {
+  try {
+    const pkg = JSON.parse(readFileSync(profilePkgPath, 'utf8'))
+    const bundles = Array.isArray(pkg.dsh?.profile?.bundles) ? pkg.dsh.profile.bundles : []
+    return bundles.includes(PLUGIN_NAME)
+  } catch {
+    return false
+  }
+}
+
 /** 在 profile 下跑 pnpm install，把 link: 依赖物化成 node_modules 符号链接。
  *  profile 自带 pnpm-workspace.yaml（nodeLinker: hoisted、autoInstallPeers: false），
  *  link 目标无 node_modules 时安装是秒级的纯链接操作。 */
@@ -253,6 +274,39 @@ async function materializeProfileLinks() {
     throw new Error('profile 缺 pnpm-workspace.yaml（' + profileDir + '）——无法安全地 pnpm install')
   }
   await pnpm(['--dir', profileDir, 'install', '--no-frozen-lockfile', '--prefer-offline'], 180_000)
+}
+
+/** 直接确保 profile node_modules 里有指向安装目录的符号链接。
+ *  pnpm install 在 lockfile 已同步时可能跳过补链；resolveBundleDir 只认
+ *  这个链接，缺了 dsh 就会在启动期抛错。 */
+function ensureProfileLink() {
+  const link = profileLinkDir()
+  if (existsSync(join(link, 'package.json'))) return true
+  if (!existsSync(join(installDir, 'package.json'))) return false
+  try {
+    rmSync(link, { recursive: true, force: true })
+  } catch {
+    // 不存在或无法删：下面 symlink 会再失败
+  }
+  mkdirSync(dirname(link), { recursive: true })
+  symlinkSync(relative(dirname(link), installDir), link, 'dir')
+  return existsSync(join(link, 'package.json'))
+}
+
+/** 登记 + 物化链接。pnpm 失败不致命；链接仍补不上则注销，避免 dsh 崩。 */
+async function confirmRegistration() {
+  const changed = setRegistration(true)
+  if (changed || !profileLinkWorks()) {
+    try {
+      await materializeProfileLinks()
+    } catch (err) {
+      console.warn('[install-desktop-plugin] 警告：pnpm install 未完成：' + (err instanceof Error ? err.message : String(err)))
+    }
+  }
+  if (!ensureProfileLink()) {
+    setRegistration(false)
+    throw new Error('无法把插件链到 web profile node_modules；已注销以免 dsh 启动失败')
+  }
 }
 
 /** 为安装目录补 host 半侧的运行时依赖符号链接。
@@ -290,35 +344,40 @@ if (command === 'uninstall') {
 }
 
 // ---- install ----
+if (!existsSync(profilePkgPath)) {
+  console.log('[install-desktop-plugin] profile 未初始化，跳过（等 DSH 首次启动后再装）')
+  process.exit(0)
+}
+
 const installed = installedPluginVersion()
 
 try {
   if (installed !== undefined && compareVersions(installed, REQUIRED_VERSION) >= 0) {
-    const changed = setRegistration(true)
-    // 注册没变化也要兜底：链接缺失（pnpm install 没跑过/被清）同样致命。
-    const linkExists = existsSync(join(dshHome, 'profiles', 'web', 'node_modules', ...PLUGIN_NAME.split('/'), 'package.json'))
-    if (changed || !linkExists) await materializeProfileLinks()
+    await confirmRegistration()
     await linkHostDeps()
     console.log('[install-desktop-plugin] 已安装 ' + installed + '，注册已确认')
     process.exit(0)
   }
 
   const latest = await latestPluginVersion()
-  if (latest === undefined) {
-    // 包尚未发布（或 registry 暂不可达）：不算失败——下次启动重试，发布后自动装上。
-    console.log('[install-desktop-plugin] npm 上尚无 ' + PLUGIN_NAME + '，跳过安装（下次启动重试）')
-    process.exit(0)
-  }
-  if (compareVersions(latest, REQUIRED_VERSION) < 0) {
-    console.log('[install-desktop-plugin] npm 最新版 ' + latest + ' 低于要求的 ' + REQUIRED_VERSION + '，跳过安装')
+  if (latest === undefined || compareVersions(latest, REQUIRED_VERSION) < 0) {
+    // 装不上、本地也不够：若已登记则注销，避免 dsh 解析失败。
+    if (isRegistered()) {
+      setRegistration(false)
+      console.log('[install-desktop-plugin] 已从 web profile 注销未就绪的插件')
+    }
+    if (latest === undefined) {
+      console.log('[install-desktop-plugin] npm 上尚无 ' + PLUGIN_NAME + '，跳过安装（下次启动重试）')
+    } else {
+      console.log('[install-desktop-plugin] npm 最新版 ' + latest + ' 低于要求的 ' + REQUIRED_VERSION + '，跳过安装')
+    }
     process.exit(0)
   }
 
   console.log('[install-desktop-plugin] 从 npm 安装 ' + PLUGIN_NAME + '@' + latest + ' …')
   const version = await installFromNpm(latest)
 
-  setRegistration(true)
-  await materializeProfileLinks()
+  await confirmRegistration()
   await linkHostDeps()
   console.log('[install-desktop-plugin] 安装完成：' + PLUGIN_NAME + '@' + version + ' → ' + installDir + '（重启 DSH 生效）')
 } catch (err) {
