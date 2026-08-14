@@ -10,6 +10,10 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的 Electron 桌面外壳。内置 node + pnpm，把 `@deepseek-ai/dsh` 安装到 `~/.dsh/runtime`，并在浏览器窗口中运行 `dsh web` 界面。
 
+<p align="center">
+  <img src="../public/desktop.png" alt="DSH-Desktop 界面截图" />
+</p>
+
 ## 下载与安装
 
 预编译安装包发布在 [GitHub Releases](https://github.com/JustGenius-s/DSH-Desktop/releases)。首次启动会自动安装 DSH 运行时（约 1-2 分钟）。
@@ -70,14 +74,9 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 - node（最新）+ pnpm（最新），通过 `scripts/collect-runtime.mjs` 内置
 - `@deepseek-ai/dsh`（npm 最新版），安装到 `~/.dsh/runtime`
 
-## 资源文件
+## 我们的插件
 
-| 文件 | 用途 |
-| --- | --- |
-| `build/icon-app.png` | macOS 应用图标：深蓝渐变（`#4a8ac4` → `#2d5f9e` → `#1a3870`，splash 页配色）+ 白色鲸鱼 + 圆角 |
-| `build/icon.icns` | 多尺寸 Mac 图标集（16-1024，Retina @2x），由 `icon-app.png` 通过 `iconutil` 生成 |
-| `build/icon.png` | App 内无背景图标 —— BrowserWindow（`src/main.ts`）、splash 页、README |
-| `build/icon.ico` | Windows 应用图标（同款深蓝设计，多尺寸 16–256） |
+配套 DSH 插件见 [DSH-Plugs](https://github.com/JustGenius-s/DSH-Plugs)。
 
 ## 致谢
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "DSH-Desktop: Electron desktop shell that boots the dsh web host and renders the browser UI.",
   "type": "commonjs",
