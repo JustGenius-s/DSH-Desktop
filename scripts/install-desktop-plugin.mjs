@@ -37,10 +37,8 @@ const INSTALL_DIR_NAME = 'desktop-update'
 const REQUIRED_VERSION = '0.1.0'
 /** 单个网络/安装动作的超时。 */
 const ACTION_TIMEOUT_MS = 120_000
-/** 读取版本所用的 dist-tag：正式版用 latest；beta 期改为 'beta'。
- *  注意：npm 首发即把 latest 指到首个版本（即便发布时打了别的 tag），
- *  所以在 0.1.0 正式版发布之前，这里必须是 'beta' 才能装到 beta 线。 */
-const DIST_TAG = 'beta'
+/** 读取版本所用的 dist-tag（0.1.1 起正式版在 latest；beta 期曾用 'beta'）。 */
+const DIST_TAG = 'latest'
 
 const args = process.argv.slice(2)
 const command = args[0]
