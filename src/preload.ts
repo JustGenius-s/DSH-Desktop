@@ -5,6 +5,12 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  DesktopContribution,
+  DesktopSeatAction,
+  DesktopSeatInfo,
+  DesktopSeatName,
+} from './desktop-seats'
 
 /** 桌面更新状态：App 本体与 DSH 运行时各自的可更新信息（无更新为 null）。 */
 export interface DesktopUpdateInfo {
@@ -50,5 +56,22 @@ contextBridge.exposeInMainWorld('dshDesktop', {
 
   /** 重启应用（DSH 运行时升级完成后调用）。 */
   relaunch: (): void => ipcRenderer.send('desktop:relaunch'),
+
+  /**
+   * 桌面席位：主进程声明 applicationMenu / tray，插件只提交菜单规格。
+   * 普通浏览器没有该对象；点击以 id 回传，不暴露 Electron Menu。
+   */
+  seats: {
+    list: (): Promise<DesktopSeatInfo[]> => ipcRenderer.invoke('desktop:seats-list'),
+    contribute: (contribution: DesktopContribution): Promise<void> =>
+      ipcRenderer.invoke('desktop:seats-contribute', contribution),
+    revoke: (seat: DesktopSeatName, contributor: string): Promise<void> =>
+      ipcRenderer.invoke('desktop:seats-revoke', seat, contributor),
+    onAction: (listener: (action: DesktopSeatAction) => void): (() => void) => {
+      const wrapped = (_event: unknown, action: DesktopSeatAction) => listener(action)
+      ipcRenderer.on('desktop:seat-action', wrapped)
+      return () => ipcRenderer.removeListener('desktop:seat-action', wrapped)
+    },
+  },
 })
 

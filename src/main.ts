@@ -11,10 +11,11 @@
 
 import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, shell } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { DSH_HOST, findFreePort, startDsh, waitForReady } from './dsh-host'
 import { ensureDshInstalled } from './runtime-manager'
 import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
+import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
 
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
@@ -46,7 +47,10 @@ function createWindow(url: string): BrowserWindow {
   })
 
   win.setMenuBarVisibility(false)
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    refreshDesktopSeats()
+    win.show()
+  })
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
   })
@@ -154,6 +158,10 @@ function reportError(title: string, message: string): void {
 }
 
 app.whenReady().then(async () => {
+  // pnpm start 跑的是 Electron 二进制，菜单栏最左默认写 "Electron"；
+  // 先改名，后面 setApplicationMenu 才显示 DSH-Desktop。
+  app.setName('DSH-Desktop')
+
   let port: number
   try {
     port = await findFreePort()
@@ -201,12 +209,14 @@ app.whenReady().then(async () => {
   }
 
   splash.close()
+  // 桥与席位 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute 打空。
+  setupDesktopBridge()
+  setupDesktopSeats()
   mainWindow = createWindow(`http://${DSH_HOST}:${port}`)
 
   // 更新检查改为后台静默进行：桌面桥负责检测 + 轮询 + 通过 preload 暴露给
   // 网页；dsh-desktop-update 插件（由安装脚本装进 web profile）在侧栏设置
   // 按钮旁渲染更新徽章。安装脚本与首查都不阻塞窗口出现，失败只记日志。
-  setupDesktopBridge()
   void (async () => {
     await installDesktopPlugin()
     await checkDesktopUpdates()
