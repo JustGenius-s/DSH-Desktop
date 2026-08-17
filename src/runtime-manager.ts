@@ -65,14 +65,17 @@ export function installedDshVersion(): string | undefined {
   }
 }
 
-/** 跑一次内置 pnpm；stdio 透传，首启安装时能看到进度。 */
+/** 跑一次内置 pnpm。日志接到父进程；Windows 隐藏控制台，避免打包后弹出黑窗口。 */
 function runPnpm(args: readonly string[]): Promise<void> {
   return new Promise((resolvePnpm, reject) => {
     const child: ChildProcess = spawn(bundledNodeBin(), [bundledPnpmCjs(), ...args], {
-      stdio: 'inherit',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
       // node 必须进 PATH：pnpm 跑原生依赖的构建脚本时依赖它。
       env: withBundledBinPath(process.env),
     })
+    child.stdout?.on('data', (chunk: Buffer) => process.stdout.write(chunk))
+    child.stderr?.on('data', (chunk: Buffer) => process.stderr.write(chunk))
     child.on('error', reject)
     child.on('exit', (code) => {
       if (code === 0) resolvePnpm()

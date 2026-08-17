@@ -14,7 +14,8 @@
  *      必须物化成 profile node_modules 里的符号链接才会被解析到。
  *      pnpm 在 lockfile 已同步时可能跳过补链，因此物化后再直接确保
  *      符号链接存在；补不上则注销登记，避免 dsh 启动期解析失败。
- *      最后为插件安装目录补 host 半侧运行时依赖的符号链接。
+ *      最后为插件安装目录补 host 半侧运行时依赖的目录链接
+ *      （Windows 用 junction，避免未开开发人员模式时 symlink EPERM）。
  *
  * 卸载只做注册移除；插件文件保留，重新安装时秒回。
  * 全部操作幂等：重复执行结果一致，中途失败留下可重试的状态。
@@ -27,9 +28,9 @@
  */
 
 import { spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const PLUGIN_NAME = '@just-genius/dsh-desktop-update'
@@ -79,6 +80,7 @@ function run(cmd, cmdArgs, timeoutMs) {
   return new Promise((resolveRun, reject) => {
     const child = spawn(cmd, cmdArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
       env: {
         ...process.env,
         PATH: bundledBinDir + (process.platform === 'win32' ? ';' : ':') + (process.env.PATH ?? ''),
@@ -276,6 +278,39 @@ async function materializeProfileLinks() {
   await pnpm(['--dir', profileDir, 'install', '--no-frozen-lockfile', '--prefer-offline'], 180_000)
 }
 
+/** 删除路径：符号链接/junction 只 unlink，避免 recursive rm 跟进去删掉目标。 */
+function removePath(p) {
+  try {
+    const st = lstatSync(p)
+    if (st.isSymbolicLink()) {
+      unlinkSync(p)
+      return
+    }
+  } catch {
+    return
+  }
+  rmSync(p, { recursive: true, force: true })
+}
+
+/**
+ * 创建目录链接。Windows 普通 symlink 需要管理员或开发人员模式，会 EPERM；
+ * junction 不需要提权。junction 失败再复制，保证非管理员也能装上。
+ */
+function linkDir(target, dest) {
+  mkdirSync(dirname(dest), { recursive: true })
+  removePath(dest)
+  if (process.platform === 'win32') {
+    try {
+      symlinkSync(target, dest, 'junction')
+      return
+    } catch {
+      cpSync(target, dest, { recursive: true })
+    }
+    return
+  }
+  symlinkSync(target, dest, 'dir')
+}
+
 /** 直接确保 profile node_modules 里有指向安装目录的符号链接。
  *  pnpm install 在 lockfile 已同步时可能跳过补链；resolveBundleDir 只认
  *  这个链接，缺了 dsh 就会在启动期抛错。 */
@@ -284,12 +319,10 @@ function ensureProfileLink() {
   if (existsSync(join(link, 'package.json'))) return true
   if (!existsSync(join(installDir, 'package.json'))) return false
   try {
-    rmSync(link, { recursive: true, force: true })
+    linkDir(installDir, link)
   } catch {
-    // 不存在或无法删：下面 symlink 会再失败
+    return false
   }
-  mkdirSync(dirname(link), { recursive: true })
-  symlinkSync(relative(dirname(link), installDir), link, 'dir')
   return existsSync(join(link, 'package.json'))
 }
 
@@ -322,6 +355,7 @@ async function linkHostDeps() {
   const pkg = JSON.parse(readFileSync(join(installDir, 'package.json'), 'utf8'))
   const deps = { ...(pkg.dependencies ?? {}), ...(pkg.peerDependencies ?? {}) }
   const nmDir = join(installDir, 'node_modules')
+  const missing = []
   for (const name of Object.keys(deps)) {
     const link = join(nmDir, ...name.split('/'))
     if (existsSync(join(link, 'package.json'))) continue
@@ -330,10 +364,19 @@ async function linkHostDeps() {
       target = dirname(anchor.resolve(name + '/package.json'))
     } catch {
       console.warn('[install-desktop-plugin] 警告：无法从 profile 锚点解析 ' + name + '（host 半侧 import 可能失败）')
+      if (Object.hasOwn(pkg.dependencies ?? {}, name)) missing.push(name)
       continue
     }
-    mkdirSync(dirname(link), { recursive: true })
-    symlinkSync(target, link, 'dir')
+    try {
+      linkDir(target, link)
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      console.warn('[install-desktop-plugin] 警告：无法链接 ' + name + '：' + detail)
+      missing.push(name)
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error('无法链接 host 依赖：' + missing.join(', '))
   }
 }
 
@@ -381,5 +424,13 @@ try {
   await linkHostDeps()
   console.log('[install-desktop-plugin] 安装完成：' + PLUGIN_NAME + '@' + version + ' → ' + installDir + '（重启 DSH 生效）')
 } catch (err) {
+  try {
+    if (isRegistered()) {
+      setRegistration(false)
+      console.warn('[install-desktop-plugin] 安装失败，已注销以免 dsh 启动失败')
+    }
+  } catch {
+    // 注销失败也不要盖住原始错误
+  }
   fail(err instanceof Error ? err.message : String(err))
 }

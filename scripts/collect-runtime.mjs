@@ -52,7 +52,9 @@ async function fetchNode(version) {
 
   const extracted = join(target, `node-${version}-${distId}`)
   execFileSync('tar', ['-xf', archive, '-C', target])
-  copyFileSync(join(extracted, 'bin', nodeName), join(binDir, nodeName))
+  // Windows zip 把 node.exe 放在包根；macOS/Linux tarball 在 bin/。
+  const nodeSrc = isWin ? join(extracted, nodeName) : join(extracted, 'bin', nodeName)
+  copyFileSync(nodeSrc, join(binDir, nodeName))
   chmodSync(join(binDir, nodeName), 0o755)
   rmSync(archive, { force: true })
   rmSync(extracted, { recursive: true, force: true })

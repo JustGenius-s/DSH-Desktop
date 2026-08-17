@@ -28,7 +28,10 @@ export async function installDesktopPlugin(): Promise<boolean> {
 
   const { spawn } = await import('node:child_process')
   return new Promise((resolveRun) => {
-    const child = spawn(bundledNodeBin(), [script, 'install'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(bundledNodeBin(), [script, 'install'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
     child.stdout?.on('data', (c: Buffer) => process.stdout.write('[plugin-installer] ' + c.toString()))
     child.stderr?.on('data', (c: Buffer) => process.stderr.write('[plugin-installer] ' + c.toString()))
     child.on('error', (err) => {
