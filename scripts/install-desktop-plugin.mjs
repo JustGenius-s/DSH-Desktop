@@ -37,7 +37,7 @@ const PLUGIN_NAME = '@just-genius/dsh-desktop-update'
 const PLUGINS_DIR_NAME = 'plugins'
 const INSTALL_DIR_NAME = 'desktop-update'
 /** 宿主 App 要求的最小插件版本；已装版本 >= 它时跳过安装。 */
-const REQUIRED_VERSION = '0.1.0'
+const REQUIRED_VERSION = '0.1.2'
 /** 单个网络/安装动作的超时。 */
 const ACTION_TIMEOUT_MS = 120_000
 /** 读取版本所用的 dist-tag（0.1.1 起正式版在 latest；beta 期曾用 'beta'）。 */
