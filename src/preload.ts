@@ -16,7 +16,37 @@ import type {
   DesktopUpdateState,
   DshDesktop,
 } from './api'
-import { Ipc } from './ipc'
+import type { Ipc as IpcShape } from './ipc'
+
+// 窗口 webPreferences 开了 sandbox:true，sandboxed preload 的 require 只认
+// electron 等极少数模块，require('./ipc') 会直接抛错、整个 preload 夭折，
+// window.dshDesktop 永远注入不进来。因此频道常量必须内联在本文件里；
+// import type 编译后完全擦除（不产生 require），satisfies 把下面每个
+// 字面量值强绑定到 ./ipc.ts 的 as const 类型上——任一边改了一个字符，
+// tsc 都会在这里报错，无需人工同步。
+const Ipc = {
+  updates: {
+    getState: 'desktop:updates:get-state',
+    state: 'desktop:updates:state',
+    checkNow: 'desktop:updates:check-now',
+    downloadApp: 'desktop:updates:download-app',
+    updateDsh: 'desktop:updates:update-dsh',
+    skipVersion: 'desktop:updates:skip-version',
+    setGate: 'desktop:updates:set-gate',
+    relaunch: 'desktop:updates:relaunch',
+  },
+  seats: {
+    list: 'desktop:seats:list',
+    contribute: 'desktop:seats:contribute',
+    revoke: 'desktop:seats:revoke',
+    action: 'desktop:seats:action',
+  },
+  notify: {
+    show: 'desktop:notify:show',
+    close: 'desktop:notify:close',
+    action: 'desktop:notify:action',
+  },
+} satisfies typeof IpcShape
 
 const api: DshDesktop = {
   updates: {
