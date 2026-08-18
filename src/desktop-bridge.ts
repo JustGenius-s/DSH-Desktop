@@ -2,7 +2,7 @@
  * 桌面更新桥：主进程侧的更新状态机 + IPC 端点。
  *
  * 后台静默检测 App 本体（GitHub Releases）与 DSH 运行时（npm）的新版本，
- * 状态变化推给所有窗口；preload 把这些能力以 window.dshDesktop 暴露给网页，
+ * 状态变化推给所有窗口；preload 以 window.dshDesktop.updates 暴露给网页，
  * 由 dsh-desktop-update 客户端插件在侧栏设置按钮旁渲染更新徽章。
  *
  * 「跳过该版本」按版本号记录：被跳过的 latest 不再提示，出现更新的版本后
@@ -13,30 +13,12 @@
 import { existsSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState } from './api'
 import { checkForAppUpdate, compareVersions } from './app-updater'
+import { Ipc } from './ipc'
 import { dshHome, installedDshVersion, latestDshVersion, updateDsh } from './runtime-manager'
 
-export interface DesktopUpdateInfo {
-  current: string
-  latest: string
-  url?: string
-}
-
-/** 两个自动检查开关（持久化在 DSH settings.yaml 的 desktop-update 分节，
- *  与 dsh-desktop-update 插件注册的命名空间共享同一份存储）。 */
-export interface DesktopUpdateConfig {
-  checkApp: boolean
-  checkDsh: boolean
-}
-
-export interface DesktopUpdateState {
-  app: DesktopUpdateInfo | null
-  dsh: DesktopUpdateInfo | null
-  checking: boolean
-  config: DesktopUpdateConfig
-  /** 当前安装版本（无更新态的弹层展示用；仅app 行恒有值，dsh 未安装时为 null）。 */
-  versions: { app: string; dsh: string | null }
-}
+export type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState } from './api'
 
 /** 后台轮询间隔：6 小时。 */
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -138,7 +120,7 @@ function applySkip(info: DesktopUpdateInfo | null, kind: 'app' | 'dsh'): Desktop
 
 function broadcast(): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('desktop:update-state', state)
+    if (!win.isDestroyed()) win.webContents.send(Ipc.updates.state, state)
   }
 }
 
@@ -176,16 +158,16 @@ export async function checkDesktopUpdates(): Promise<DesktopUpdateState> {
 
 /** 注册 IPC 端点并启动后台轮询；返回当前状态（供启动时首查）。 */
 export function setupDesktopBridge(): void {
-  ipcMain.handle('desktop:get-update-state', () => state)
+  ipcMain.handle(Ipc.updates.getState, () => state)
 
-  ipcMain.handle('desktop:check-now', () => checkDesktopUpdates())
+  ipcMain.handle(Ipc.updates.checkNow, () => checkDesktopUpdates())
 
-  ipcMain.handle('desktop:download-app-update', () => {
+  ipcMain.handle(Ipc.updates.downloadApp, () => {
     const url = state.app?.url
     if (url !== undefined) void shell.openExternal(url)
   })
 
-  ipcMain.handle('desktop:update-dsh', async () => {
+  ipcMain.handle(Ipc.updates.updateDsh, async () => {
     const latest = state.dsh?.latest
     if (latest === undefined) throw new Error('当前没有可更新的 DSH 版本')
     await updateDsh(latest)
@@ -193,7 +175,7 @@ export function setupDesktopBridge(): void {
     await setState({ dsh: null })
   })
 
-  ipcMain.handle('desktop:skip-version', (_event, kind: 'app' | 'dsh') => {
+  ipcMain.handle(Ipc.updates.skipVersion, (_event, kind: 'app' | 'dsh') => {
     if (kind !== 'app' && kind !== 'dsh') return
     const info = state[kind]
     if (info === null) return
@@ -203,14 +185,14 @@ export function setupDesktopBridge(): void {
 
   // 写一个自动检查开关：持久化到 settings.yaml（与插件注册的命名空间共享
   // 存储），随后按新开关重查一轮并广播结果。
-  ipcMain.handle('desktop:set-gate', async (_event, kind: 'app' | 'dsh', enabled: unknown) => {
+  ipcMain.handle(Ipc.updates.setGate, async (_event, kind: 'app' | 'dsh', enabled: unknown) => {
     if ((kind !== 'app' && kind !== 'dsh') || typeof enabled !== 'boolean') return state
     writeUpdateGate(kind, enabled)
     await setState({ config: { ...state.config, [kind === 'app' ? 'checkApp' : 'checkDsh']: enabled } })
     return checkDesktopUpdates()
   })
 
-  ipcMain.on('desktop:relaunch', () => {
+  ipcMain.on(Ipc.updates.relaunch, () => {
     app.relaunch()
     app.quit()
   })

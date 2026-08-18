@@ -74,6 +74,10 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 - node (latest) + pnpm (latest), bundled via `scripts/collect-runtime.mjs`
 - `@deepseek-ai/dsh` (npm latest), installed to `~/.dsh/runtime`
 
+## Desktop plugin API
+
+The shell injects `window.dshDesktop` into the DSH page (`updates` / `seats` / `notify`). Plugins should depend on that contract, not on Electron packaging code. See [docs/desktop-api.md](docs/desktop-api.md).
+
 ## Our plugins
 
 Companion DSH plugins live in [DSH-Plugs](https://github.com/JustGenius-s/DSH-Plugs).

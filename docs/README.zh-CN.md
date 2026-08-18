@@ -74,6 +74,10 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 - node（最新）+ pnpm（最新），通过 `scripts/collect-runtime.mjs` 内置
 - `@deepseek-ai/dsh`（npm 最新版），安装到 `~/.dsh/runtime`
 
+## 桌面插件 API
+
+壳把 `window.dshDesktop` 注入到 DSH 网页（`updates` / `seats` / `notify`）。插件应依赖这份契约，而不是 Electron 打包代码。见 [desktop-api.md](desktop-api.md)。
+
 ## 我们的插件
 
 配套 DSH 插件见 [DSH-Plugs](https://github.com/JustGenius-s/DSH-Plugs)。

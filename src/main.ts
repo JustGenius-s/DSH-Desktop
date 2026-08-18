@@ -15,6 +15,7 @@ import { app, BrowserWindow, dialog } from 'electron'
 import { DSH_HOST, findFreePort, startDsh, waitForReady } from './dsh-host'
 import { ensureDshInstalled } from './runtime-manager'
 import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
+import { setupDesktopNotify } from './desktop-notify'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
 
@@ -41,7 +42,7 @@ function createWindow(url: string): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // 向 DSH 网页暴露 window.dshDesktop（更新状态查询/操作），preload 自身零依赖。
+      // 向 DSH 网页暴露 window.dshDesktop（updates / seats / notify）。
       preload: join(__dirname, 'preload.js'),
     },
   })
@@ -215,9 +216,10 @@ app.whenReady().then(async () => {
   }
 
   splash.close()
-  // 桥与席位 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute 打空。
+  // 三族 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify 打空。
   setupDesktopBridge()
   setupDesktopSeats()
+  setupDesktopNotify()
   mainWindow = createWindow(`http://${DSH_HOST}:${port}`)
 
   // 更新检查改为后台静默进行：桌面桥负责检测 + 轮询 + 通过 preload 暴露给

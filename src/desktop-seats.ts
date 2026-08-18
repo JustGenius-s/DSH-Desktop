@@ -9,7 +9,6 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   app,
-  BrowserWindow,
   ipcMain,
   Menu,
   nativeImage,
@@ -17,44 +16,25 @@ import {
   type MenuItemConstructorOptions,
   type WebContents,
 } from 'electron'
+import {
+  DESKTOP_ID_RE,
+  type DesktopMenuAttach,
+  type DesktopMenuItemSpec,
+  type DesktopSeatAction,
+  type DesktopSeatInfo,
+  type DesktopSeatName,
+} from './api'
+import { Ipc } from './ipc'
+import { focusMainWindow, webContentsById } from './windows'
 
-/** 主进程声明的席位名。未声明的席位拒绝 contribute。 */
-export type DesktopSeatName = 'applicationMenu' | 'tray'
-
-/** 插件可挂到应用菜单的哪一段：app = 应用/文件菜单；plugins = Plugins 子菜单。 */
-export type DesktopMenuAttach = 'app' | 'plugins'
-
-export interface DesktopMenuItemSpec {
-  id?: string
-  type?: 'normal' | 'separator' | 'checkbox' | 'radio'
-  label?: string
-  accelerator?: string
-  enabled?: boolean
-  visible?: boolean
-  checked?: boolean
-  submenu?: DesktopMenuItemSpec[]
-}
-
-export interface DesktopContribution {
-  seat: DesktopSeatName
-  contributor: string
-  menu?: DesktopMenuAttach
-  order?: number
-  tooltip?: string
-  items: DesktopMenuItemSpec[]
-}
-
-export interface DesktopSeatAction {
-  seat: DesktopSeatName
-  contributor: string
-  id: string
-}
-
-export interface DesktopSeatInfo {
-  name: DesktopSeatName
-  declared: true
-  description: string
-}
+export type {
+  DesktopContribution,
+  DesktopMenuAttach,
+  DesktopMenuItemSpec,
+  DesktopSeatAction,
+  DesktopSeatInfo,
+  DesktopSeatName,
+} from './api'
 
 const DECLARED_SEATS: readonly DesktopSeatInfo[] = [
   {
@@ -72,7 +52,7 @@ const DECLARED_SEATS: readonly DesktopSeatInfo[] = [
 const MAX_ITEMS = 24
 const MAX_DEPTH = 2
 const MAX_LABEL = 120
-const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+const ID_RE = DESKTOP_ID_RE
 const ACCEL_RE =
   /^(?:(?:CommandOrControl|CmdOrCtrl|Command|Cmd|Control|Ctrl|Alt|Option|AltGr|Shift|Super|Meta)\+)*(?:[A-Za-z0-9]+|F(?:[1-9]|1[0-9]|2[0-4])|Plus|Space|Tab|Backspace|Delete|Return|Enter|Up|Down|Left|Right)$/
 
@@ -93,21 +73,6 @@ let rebuildTimer: NodeJS.Timeout | null = null
 
 function trayIconPath(): string {
   return join(app.getAppPath(), 'build', 'icon.png')
-}
-
-function focusMainWindow(): void {
-  const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
-  if (win === undefined) return
-  if (win.isMinimized()) win.restore()
-  win.show()
-  win.focus()
-}
-
-function webContentsById(id: number): WebContents | undefined {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed() && win.webContents.id === id) return win.webContents
-  }
-  return undefined
 }
 
 function sanitizeItems(raw: unknown, depth: number): DesktopMenuItemSpec[] | null {
@@ -222,7 +187,7 @@ function toElectronItems(
       opts.click = () => {
         const wc = webContentsById(wcId)
         if (wc === undefined || wc.isDestroyed()) return
-        wc.send('desktop:seat-action', { seat, contributor, id: actionId } satisfies DesktopSeatAction)
+        wc.send(Ipc.seats.action, { seat, contributor, id: actionId } satisfies DesktopSeatAction)
       }
     }
     return opts
@@ -360,9 +325,9 @@ function watchSender(wc: WebContents): void {
 
 /** 声明席位、装 IPC、立刻渲染所有者自己的应用菜单。 */
 export function setupDesktopSeats(): void {
-  ipcMain.handle('desktop:seats-list', () => DECLARED_SEATS)
+  ipcMain.handle(Ipc.seats.list, () => DECLARED_SEATS)
 
-  ipcMain.handle('desktop:seats-contribute', (event, raw: unknown) => {
+  ipcMain.handle(Ipc.seats.contribute, (event, raw: unknown) => {
     const spec = sanitizeContribution(raw)
     if (spec === null) {
       console.warn('[DSH-Desktop] rejected desktop contribution', raw)
@@ -377,7 +342,7 @@ export function setupDesktopSeats(): void {
     scheduleRebuild()
   })
 
-  ipcMain.handle('desktop:seats-revoke', (event, seat: unknown, contributor: unknown) => {
+  ipcMain.handle(Ipc.seats.revoke, (event, seat: unknown, contributor: unknown) => {
     if (seat !== 'applicationMenu' && seat !== 'tray') return
     if (typeof contributor !== 'string' || !ID_RE.test(contributor)) return
     remove(event.sender.id, seat, contributor)

@@ -55,6 +55,9 @@
     "icon": "build/icon-app.png",
     "mac": {
       "icon": "build/icon.icns",
+      "extendInfo": {
+        "NSUserNotificationAlertStyle": "alert"
+      },
       "category": "public.app-category.developer-tools",
       "target": [
         "dmg",
