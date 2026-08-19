@@ -5,7 +5,7 @@
  */
 
 import { join } from 'node:path'
-import { BrowserWindow, ipcMain, screen, type WebContents } from 'electron'
+import { BrowserWindow, ipcMain, screen, session, type Session, type WebContents } from 'electron'
 import {
   DESKTOP_ID_RE,
   type DesktopOverlayBounds,
@@ -34,6 +34,18 @@ interface OverlayRow {
 const overlays: OverlayRow[] = []
 const watchedOwners = new Set<number>()
 let getOrigin: () => string | null = () => null
+const OVERLAY_PARTITION = 'persist:dsh-overlay'
+let overlaySessionReady = false
+
+function ensureOverlaySession(): Session {
+  const ses = session.fromPartition(OVERLAY_PARTITION)
+  if (!overlaySessionReady) {
+    overlaySessionReady = true
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+    ses.setPermissionCheckHandler(() => false)
+  }
+  return ses
+}
 
 function preloadFile(): string {
   return join(__dirname, 'preload.js')
@@ -259,9 +271,42 @@ function isAllowedOverlayUrl(url: string): boolean {
   }
 }
 
+function isBenignLoadError(err: unknown): boolean {
+  const code = err !== null && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : ''
+  const message = err instanceof Error ? err.message : String(err)
+  return code === 'ERR_ABORTED' || code === 'ERR_FAILED' || /ERR_ABORTED|ERR_FAILED/.test(message)
+}
+
+async function loadOverlayUrl(win: BrowserWindow, url: string): Promise<void> {
+  try {
+    await win.loadURL(url)
+    return
+  } catch (err) {
+    // Closing a still-loading overlay (replace / settings remount) aborts Chromium
+    // with ERR_FAILED / ERR_ABORTED even when a later window loaded fine.
+    if (win.isDestroyed() && isBenignLoadError(err)) return
+    if (!win.isDestroyed() && win.webContents.getURL() === url && isBenignLoadError(err)) return
+    throw err
+  }
+}
+
 async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Promise<DesktopOverlayInfo> {
-  const existing = overlays.find((row) => row.contributor === spec.contributor)
-  if (existing !== undefined) dispose(existing, true)
+  const existing = overlays.find((row) => row.contributor === spec.contributor && !row.win.isDestroyed())
+  if (existing !== undefined) {
+    existing.id = spec.id
+    existing.ownerWcId = owner.id
+    applyChrome(existing.win, spec.chrome ?? {}, false)
+    const current = existing.win.getBounds()
+    const width = spec.bounds.width
+    const height = spec.bounds.height
+    const x = spec.bounds.x ?? current.x
+    const y = spec.bounds.y ?? current.y
+    const placed = clampRect(x, y, width, height)
+    existing.win.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
+    if (existing.win.webContents.getURL() !== spec.url) await loadOverlayUrl(existing.win, spec.url)
+    if (!existing.win.isDestroyed()) existing.win.show()
+    return infoOf(existing)
+  }
 
   const chrome = spec.chrome ?? {}
   const width = spec.bounds.width
@@ -281,6 +326,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     height: placed.height,
     transparent,
     frame,
+    type: !frame && process.platform === 'darwin' ? 'panel' : undefined,
     alwaysOnTop: chrome.alwaysOnTop === true,
     show: false,
     resizable: chrome.resizable === true,
@@ -295,6 +341,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      session: ensureOverlaySession(),
       preload: preloadFile(),
     },
   })
@@ -331,8 +378,10 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   })
 
   try {
-    await win.loadURL(spec.url)
+    await loadOverlayUrl(win, spec.url)
   } catch (err) {
+    const detail = err instanceof Error ? `${err.message} (${spec.url})` : String(err)
+    console.error(`[DSH-Desktop] overlay load failed: ${detail}`)
     dispose(row, false)
     throw err instanceof Error ? err : new Error('desktop overlay failed to load')
   }
@@ -397,6 +446,7 @@ function listFor(sender: WebContents): DesktopOverlayInfo[] {
 /** 注册 overlay IPC。必须在 loadURL 之前调用。 */
 export function setupDesktopOverlays(origin: () => string | null): void {
   getOrigin = origin
+  ensureOverlaySession()
 
   ipcMain.handle(Ipc.overlays.open, async (event, raw: unknown): Promise<DesktopOverlayInfo> => {
     if (isOverlaySender(event.sender) !== undefined) throw new Error('overlay cannot open another overlay')

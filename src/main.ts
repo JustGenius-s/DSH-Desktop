@@ -11,7 +11,7 @@
 
 import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, session } from 'electron'
 import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, waitForReady, type DshHost } from './dsh-host'
 import { ensureDshInstalled } from './runtime-manager'
 import { extractFailedPlugins, getProfileBundles, quarantineBundle, restoreQuarantined } from './plugin-quarantine'
@@ -201,10 +201,22 @@ function onceExit(child: ChildProcess, timeoutMs: number): Promise<void> {
   })
 }
 
+async function hardenChromiumStorage(): Promise<void> {
+  const sessions = [session.defaultSession, session.fromPartition('persist:dsh-overlay')]
+  for (const ses of sessions) {
+    try {
+      await ses.clearStorageData({ storages: ['serviceworkers'] })
+    } catch {
+      // A leftover SW LevelDB from a previous crash is noisy but not fatal.
+    }
+  }
+}
+
 app.whenReady().then(async () => {
   // pnpm start 跑的是 Electron 二进制，菜单栏最左默认写 "Electron"；
   // 先改名，后面 setApplicationMenu 才显示 DSH-Desktop。
   app.setName('DSH-Desktop')
+  await hardenChromiumStorage()
 
   let port: number
   try {
