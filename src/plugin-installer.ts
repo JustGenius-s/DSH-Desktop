@@ -9,6 +9,10 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { bundledNodeBin } from './runtime-manager'
+import { isQuarantined } from './plugin-quarantine'
+
+/** 与 scripts/install-desktop-plugin.mjs 的 PLUGIN_NAME 保持一致。 */
+const DESKTOP_UPDATE_PLUGIN = '@just-genius/dsh-desktop-update'
 
 /**
  * 安装/修复 dsh-desktop-update 插件。成功或「包未发布跳过」返回 true；
@@ -18,6 +22,12 @@ import { bundledNodeBin } from './runtime-manager'
  * 但 node_modules 链接缺失会让 dsh 在 loadProfile 阶段直接退出。
  */
 export async function installDesktopPlugin(): Promise<boolean> {
+  // 插件因导致启动失败被隔离时跳过：安装脚本会无条件重新登记 bundles，
+  // 不跳过的话隔离永远立不住。
+  if (isQuarantined(DESKTOP_UPDATE_PLUGIN)) {
+    console.warn('[DSH-Desktop] 桌面更新插件已被隔离，跳过自动安装/登记')
+    return true
+  }
   const script = app.isPackaged
     ? join(process.resourcesPath, 'scripts', 'install-desktop-plugin.mjs')
     : join(app.getAppPath(), 'scripts', 'install-desktop-plugin.mjs')

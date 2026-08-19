@@ -18,6 +18,15 @@ export const READY_TIMEOUT_MS = 30_000
 /** 就绪轮询间隔。 */
 const READY_POLL_MS = 250
 
+/** 子进程输出环形缓冲上限（字符数）：够装启动失败的完整堆栈。 */
+const OUTPUT_BUFFER_LIMIT = 64 * 1024
+
+/** 运行中的 dsh host：子进程句柄 + 至今的输出尾部（用于启动失败归因）。 */
+export interface DshHost {
+  child: ChildProcess
+  recentOutput: () => string
+}
+
 /** 分配一个空闲的回环 TCP 端口。 */
 export function findFreePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
@@ -37,17 +46,28 @@ export function findFreePort(): Promise<number> {
  * @param port - 回环端口。
  * @param bin - dsh CLI 入口（由 main.ts 先 `ensureDshInstalled()` 解析）。
  */
-export function startDsh(port: number, bin: string): ChildProcess {
+export function startDsh(port: number, bin: string): DshHost {
   const env: NodeJS.ProcessEnv = withBundledBinPath({ ...process.env })
   const args = [bin, 'web', '--host', DSH_HOST, '--port', String(port)]
 
   const child = spawn(bundledNodeBin(), args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
 
-  // 把 dsh 的日志透传到 Electron 的 stdout/stderr，方便排查。
-  child.stdout?.on('data', (chunk: Buffer) => process.stdout.write(`[dsh] ${chunk.toString()}`))
-  child.stderr?.on('data', (chunk: Buffer) => process.stderr.write(`[dsh] ${chunk.toString()}`))
+  // 把 dsh 的日志透传到 Electron 的 stdout/stderr，同时留一份尾部缓冲，
+  // 供启动失败时归因故障插件（plugin-quarantine）。
+  let output = ''
+  const append = (chunk: Buffer) => {
+    output = (output + chunk.toString()).slice(-OUTPUT_BUFFER_LIMIT)
+  }
+  child.stdout?.on('data', (chunk: Buffer) => {
+    process.stdout.write(`[dsh] ${chunk.toString()}`)
+    append(chunk)
+  })
+  child.stderr?.on('data', (chunk: Buffer) => {
+    process.stderr.write(`[dsh] ${chunk.toString()}`)
+    append(chunk)
+  })
 
-  return child
+  return { child, recentOutput: () => output }
 }
 
 /** 探测 host 是否已响应（任意非 5xx 都算「起来了」）。 */
@@ -65,13 +85,14 @@ function probe(url: string): Promise<boolean> {
   })
 }
 
-/** 轮询直到 host 响应，超时抛错。 */
-export async function waitForReady(port: number, timeoutMs = READY_TIMEOUT_MS): Promise<void> {
+/** 轮询直到 host 响应，超时抛错；signal 中止时静默返回（调用方已另有结论）。 */
+export async function waitForReady(port: number, timeoutMs = READY_TIMEOUT_MS, signal?: AbortSignal): Promise<void> {
   const url = `http://${DSH_HOST}:${port}/`
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  while (!signal?.aborted && Date.now() < deadline) {
     if (await probe(url)) return
     await new Promise(r => setTimeout(r, READY_POLL_MS))
   }
+  if (signal?.aborted) return
   throw new Error(`dsh host 未在 ${timeoutMs}ms 内就绪（${url}）`)
 }
