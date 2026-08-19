@@ -17,8 +17,10 @@ import { ensureDshInstalled } from './runtime-manager'
 import { extractFailedPlugins, getProfileBundles, quarantineBundle, restoreQuarantined } from './plugin-quarantine'
 import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
 import { setupDesktopNotify } from './desktop-notify'
+import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
+import { setWindowRole } from './windows'
 
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
@@ -28,6 +30,7 @@ const MAX_QUARANTINE_RESTARTS = 3
 
 let dshProcess: ChildProcess | null = null
 let mainWindow: BrowserWindow | null = null
+let dshOrigin: string | null = null
 let stopping = false
 
 function createWindow(url: string): BrowserWindow {
@@ -46,18 +49,23 @@ function createWindow(url: string): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // 向 DSH 网页暴露 window.dshDesktop（updates / seats / notify）。
+      // 向 DSH 网页暴露 window.dshDesktop（updates / seats / notify / overlays）。
       preload: join(__dirname, 'preload.js'),
     },
   })
 
+  setWindowRole(win, 'main')
   win.setMenuBarVisibility(false)
   win.once('ready-to-show', () => {
     refreshDesktopSeats()
     win.show()
   })
   win.on('closed', () => {
-    if (mainWindow === win) mainWindow = null
+    if (mainWindow !== win) return
+    mainWindow = null
+    // overlay 不能单独续命应用：主窗口关了就把桌宠一起收掉。
+    closeAllOverlays()
+    if (!stopping) app.quit()
   })
   // DSH 网页加载完成后注入顶部拖拽条与红绿灯避让样式（隐藏原生标题栏后必需）。
   win.webContents.on('did-finish-load', () => {
@@ -152,6 +160,7 @@ function createSplash(): BrowserWindow {
       sandbox: true,
     },
   })
+  setWindowRole(win, 'splash')
   win.once('ready-to-show', () => win.show())
   void win.loadFile(join(app.getAppPath(), 'build', 'splash.html'))
   return win
@@ -277,11 +286,13 @@ app.whenReady().then(async () => {
   }
 
   splash.close()
-  // 三族 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify 打空。
+  dshOrigin = `http://${DSH_HOST}:${port}`
+  // 四族 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify / open 打空。
   setupDesktopBridge()
   setupDesktopSeats()
   setupDesktopNotify()
-  mainWindow = createWindow(`http://${DSH_HOST}:${port}`)
+  setupDesktopOverlays(() => dshOrigin)
+  mainWindow = createWindow(dshOrigin)
 
   // 有插件被隔离时告知用户，并提供「恢复并重启」入口；恢复后仍崩会被再次隔离。
   if (quarantined.length > 0) {
@@ -315,6 +326,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   stopping = true
+  closeAllOverlays()
   const p = dshProcess
   dshProcess = null
   if (p && !p.killed) {

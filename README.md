@@ -76,7 +76,7 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 
 ## Desktop plugin API
 
-The shell injects `window.dshDesktop` into the DSH page (`updates` / `seats` / `notify`). Plugins should depend on that contract, not on Electron packaging code. See [docs/desktop-api.md](docs/desktop-api.md).
+The shell injects `window.dshDesktop` into the DSH page (`updates` / `seats` / `notify` / `overlays`). Plugins should depend on that contract, not on Electron packaging code. See [docs/desktop-api.md](docs/desktop-api.md).
 
 ## Our plugins
 

@@ -1,9 +1,9 @@
 /**
  * DSH-Desktop 插件契约。
  *
- * 这是 `window.dshDesktop` 的标准表面：三族能力，纯 JSON / 回调，
+ * 这是 `window.dshDesktop` 的标准表面：四族能力，纯 JSON / 回调，
  * 不出现 Electron 类型。插件只应依赖本文件里的形状；菜单、托盘、
- * 通知、更新检测的原生实现都在主进程，与打包代码分开。
+ * 通知、更新检测、overlay 窗口的原生实现都在主进程，与打包代码分开。
  *
  * 普通浏览器没有该对象。桌面壳以 contextIsolation preload 注入。
  */
@@ -140,15 +140,103 @@ export interface DshDesktopNotify {
 }
 
 // ---------------------------------------------------------------------------
+// overlays — 同源原生小窗，跟贡献窗口同寿
+// ---------------------------------------------------------------------------
+
+export interface DesktopOverlayBounds {
+  width: number
+  height: number
+  x?: number
+  y?: number
+}
+
+export interface DesktopOverlayRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type DesktopOverlayIgnoreMouse = 'none' | 'all' | 'forward'
+
+export interface DesktopOverlayChrome {
+  transparent?: boolean
+  frame?: boolean
+  alwaysOnTop?: boolean
+  skipTaskbar?: boolean
+  resizable?: boolean
+  hasShadow?: boolean
+  ignoreMouseEvents?: DesktopOverlayIgnoreMouse
+}
+
+export interface DesktopOverlayOpenSpec {
+  contributor: string
+  id: string
+  /** 当前 DSH origin 的 path（如 `/whale-girl/overlay`）。 */
+  url: string
+  bounds: DesktopOverlayBounds
+  chrome?: DesktopOverlayChrome
+}
+
+export interface DesktopOverlayUpdateSpec {
+  bounds?: Partial<DesktopOverlayBounds>
+  chrome?: DesktopOverlayChrome
+}
+
+export interface DesktopOverlayPoint {
+  x: number
+  y: number
+}
+
+export interface DesktopOverlayDelta {
+  dx: number
+  dy: number
+}
+
+export type DesktopOverlayMoveSpec = DesktopOverlayPoint | DesktopOverlayDelta
+
+export interface DesktopOverlayMoveResult {
+  x: number
+  y: number
+  hitEdge: boolean
+}
+
+export interface DesktopOverlayInfo {
+  contributor: string
+  id: string
+  bounds: DesktopOverlayRect
+}
+
+export interface DesktopOverlayClosed {
+  contributor: string
+  id: string
+}
+
+export interface DshDesktopOverlays {
+  /** 打开一扇同源 overlay；同一 contributor 再次 open 会替换旧窗。 */
+  open(spec: DesktopOverlayOpenSpec): Promise<DesktopOverlayInfo>
+  update(id: string, spec: DesktopOverlayUpdateSpec): Promise<DesktopOverlayInfo>
+  /** 绝对坐标或 delta；越界会被 clamp，`hitEdge` 表示撞到屏边。 */
+  move(id: string, spec: DesktopOverlayMoveSpec): Promise<DesktopOverlayMoveResult>
+  setIgnoreMouseEvents(id: string, ignore: boolean, opts?: { forward?: boolean }): Promise<void>
+  focus(id: string): Promise<void>
+  close(id: string): Promise<void>
+  list(): Promise<DesktopOverlayInfo[]>
+  onClosed(listener: (event: DesktopOverlayClosed) => void): () => void
+}
+
+// ---------------------------------------------------------------------------
 // root
 // ---------------------------------------------------------------------------
 
 /**
- * 桌面壳注入到网页的标准 API。三族并列：
- * updates = 领域动作；seats = 持久原生 UI 贡献；notify = 短暂系统通知。
+ * 桌面壳注入到网页的标准 API。四族并列：
+ * updates = 领域动作；seats = 持久原生 UI 贡献；notify = 短暂系统通知；
+ * overlays = 同源原生小窗。
  */
 export interface DshDesktop {
   updates: DshDesktopUpdates
   seats: DshDesktopSeats
   notify: DshDesktopNotify
+  overlays: DshDesktopOverlays
 }

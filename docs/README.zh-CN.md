@@ -76,7 +76,7 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 
 ## 桌面插件 API
 
-壳把 `window.dshDesktop` 注入到 DSH 网页（`updates` / `seats` / `notify`）。插件应依赖这份契约，而不是 Electron 打包代码。见 [desktop-api.md](desktop-api.md)。
+壳把 `window.dshDesktop` 注入到 DSH 网页（`updates` / `seats` / `notify` / `overlays`）。插件应依赖这份契约，而不是 Electron 打包代码。见 [desktop-api.md](desktop-api.md)。
 
 ## 我们的插件
 

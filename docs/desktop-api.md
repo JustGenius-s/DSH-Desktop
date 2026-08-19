@@ -1,6 +1,6 @@
 # `window.dshDesktop` 插件契约
 
-这是桌面壳注入到 DSH 网页的标准 API。插件只应依赖这里的形状；菜单、托盘、通知、更新检测的原生实现都在 Electron 主进程，与打包脚本分开。
+这是桌面壳注入到 DSH 网页的标准 API。插件只应依赖这里的形状；菜单、托盘、通知、更新检测、overlay 窗口的原生实现都在 Electron 主进程，与打包脚本分开。
 
 源码真相：`src/api.ts`（类型）+ `src/preload.ts`（注入）+ `src/ipc.ts`（频道名，插件看不见）。
 
@@ -11,15 +11,16 @@ const desktop = window.dshDesktop
 if (desktop === undefined) return // 非桌面壳，空操作
 ```
 
-三族并列，不要把动作摊到根上，也不要把通知做成席位。
+四族并列，不要把动作摊到根上，也不要把通知或 overlay 做成席位。
 
 | 族 | 语义 | 寿命 |
 |---|---|---|
 | `updates` | 桌面更新领域动作 | 一次请求 |
 | `seats` | 持久原生 UI 贡献（菜单 / 托盘） | 跟插件 fiber 同寿 |
 | `notify` | 系统通知 | 弹出 / 替换 / 关掉 |
+| `overlays` | 同源原生小窗（透明置顶等） | 跟贡献窗口同寿 |
 
-主进程不跑 Cordis，也不把 `Menu` / `Tray` / `Notification` 对象交给网页。点击只回传 `{ contributor, id }`。
+主进程不跑 Cordis，也不把 `Menu` / `Tray` / `Notification` / `BrowserWindow` 对象交给网页。点击只回传 `{ contributor, id }`。
 
 ## `updates`
 
@@ -96,3 +97,45 @@ await desktop.notify.close('desktop-update') // 该 contributor 全部
 - 插件卸载时应 `close(contributor)`
 
 macOS 打包包在 `Info.plist` 里声明了 `NSUserNotificationAlertStyle=alert`。开发态 `pnpm start` 走 Electron 二进制，通知可能显示为 Electron，系统也可能先问权限。
+
+## `overlays`
+
+主进程开一扇同源小窗。插件只交 JSON：URL、尺寸、窗口铬（透明 / 置顶 / 点穿）。拿不到 `BrowserWindow`。
+
+```ts
+const info = await desktop.overlays.open({
+  contributor: 'whale-girl',
+  id: 'pet',
+  url: '/whale-girl/overlay',
+  bounds: { width: 160, height: 160 },
+  chrome: {
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    hasShadow: false,
+    ignoreMouseEvents: 'forward', // none | all | forward
+  },
+})
+const off = desktop.overlays.onClosed((event) => {
+  if (event.contributor !== 'whale-girl') return
+  // event.id
+})
+await desktop.overlays.move('pet', { dx: 12, dy: 0 }) // 或 { x, y }；撞屏返回 hitEdge
+await desktop.overlays.setIgnoreMouseEvents('pet', true, { forward: true })
+await desktop.overlays.update('pet', { bounds: { width: 180, height: 180 } })
+await desktop.overlays.close('pet')
+```
+
+约束（主进程消毒，非法规格抛错）：
+
+- `contributor` / `id`：字母数字开头，最长 64
+- 每个 contributor 同时最多 1 扇；再次 `open` 替换旧窗
+- `url` 必须是当前 DSH origin 的 path（`/foo`），禁止 `file:` / `data:` / 远程 / `..`
+- 宽高夹在 64–800；位置 clamp 到可见工作区
+- overlay 窗口也注入 `window.dshDesktop`，渲染页可 `move` / `setIgnoreMouseEvents` / `close` 自己
+- overlay 不能再开另一扇 overlay
+- 贡献窗口销毁或主窗口关闭时，该窗口开的 overlay 自动卸掉
+- overlay 不能单独续命应用：主窗口关了，应用退出
+- `transparent` / `frame` 只在 `open` 时生效，`update` 改不了

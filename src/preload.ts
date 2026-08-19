@@ -1,8 +1,8 @@
 /**
  * DSH-Desktop preload：以 contextBridge 向 DSH 网页暴露标准桌面 API。
  *
- * 契约见 `./api`（updates / seats / notify）。本文件只做 IPC 转发，
- * 不引入 Menu / Tray / Notification。普通浏览器没有 window.dshDesktop。
+ * 契约见 `./api`（updates / seats / notify / overlays）。本文件只做 IPC 转发，
+ * 不引入 Menu / Tray / Notification / BrowserWindow。普通浏览器没有 window.dshDesktop。
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
@@ -10,6 +10,10 @@ import type {
   DesktopContribution,
   DesktopNotifyAction,
   DesktopNotifySpec,
+  DesktopOverlayClosed,
+  DesktopOverlayMoveSpec,
+  DesktopOverlayOpenSpec,
+  DesktopOverlayUpdateSpec,
   DesktopSeatAction,
   DesktopSeatName,
   DesktopUpdateKind,
@@ -45,6 +49,16 @@ const Ipc = {
     show: 'desktop:notify:show',
     close: 'desktop:notify:close',
     action: 'desktop:notify:action',
+  },
+  overlays: {
+    open: 'desktop:overlays:open',
+    update: 'desktop:overlays:update',
+    move: 'desktop:overlays:move',
+    setIgnoreMouseEvents: 'desktop:overlays:set-ignore-mouse-events',
+    focus: 'desktop:overlays:focus',
+    close: 'desktop:overlays:close',
+    list: 'desktop:overlays:list',
+    closed: 'desktop:overlays:closed',
   },
 } satisfies typeof IpcShape
 
@@ -85,6 +99,23 @@ const api: DshDesktop = {
       const wrapped = (_event: unknown, action: DesktopNotifyAction) => listener(action)
       ipcRenderer.on(Ipc.notify.action, wrapped)
       return () => ipcRenderer.removeListener(Ipc.notify.action, wrapped)
+    },
+  },
+  overlays: {
+    open: (spec: DesktopOverlayOpenSpec) => ipcRenderer.invoke(Ipc.overlays.open, spec),
+    update: (id: string, spec: DesktopOverlayUpdateSpec) =>
+      ipcRenderer.invoke(Ipc.overlays.update, id, spec),
+    move: (id: string, spec: DesktopOverlayMoveSpec) =>
+      ipcRenderer.invoke(Ipc.overlays.move, id, spec),
+    setIgnoreMouseEvents: (id: string, ignore: boolean, opts?: { forward?: boolean }) =>
+      ipcRenderer.invoke(Ipc.overlays.setIgnoreMouseEvents, id, ignore, opts),
+    focus: (id: string) => ipcRenderer.invoke(Ipc.overlays.focus, id),
+    close: (id: string) => ipcRenderer.invoke(Ipc.overlays.close, id),
+    list: () => ipcRenderer.invoke(Ipc.overlays.list),
+    onClosed: (listener: (event: DesktopOverlayClosed) => void): (() => void) => {
+      const wrapped = (_event: unknown, event: DesktopOverlayClosed) => listener(event)
+      ipcRenderer.on(Ipc.overlays.closed, wrapped)
+      return () => ipcRenderer.removeListener(Ipc.overlays.closed, wrapped)
     },
   },
 }
