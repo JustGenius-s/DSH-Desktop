@@ -304,7 +304,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     const placed = clampRect(x, y, width, height)
     existing.win.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
     if (existing.win.webContents.getURL() !== spec.url) await loadOverlayUrl(existing.win, spec.url)
-    if (!existing.win.isDestroyed()) existing.win.show()
+    if (!existing.win.isDestroyed()) existing.win.showInactive()
     return infoOf(existing)
   }
 
@@ -328,6 +328,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     frame,
     type: !frame && process.platform === 'darwin' ? 'panel' : undefined,
     alwaysOnTop: chrome.alwaysOnTop === true,
+    focusable: false,
     show: false,
     resizable: chrome.resizable === true,
     hasShadow: chrome.hasShadow === true,
@@ -348,6 +349,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   setWindowRole(win, 'overlay')
   win.setMenuBarVisibility(false)
   win.setTitle('')
+  win.setFocusable(false)
   applyChrome(win, chrome, true)
 
   const row: OverlayRow = {
@@ -386,7 +388,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     throw err instanceof Error ? err : new Error('desktop overlay failed to load')
   }
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
-  win.show()
+  win.showInactive()
   console.log(`[DSH-Desktop] overlay ${spec.contributor}/${spec.id} ${placed.width}x${placed.height}`)
   return infoOf(row)
 }

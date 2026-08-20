@@ -3,7 +3,7 @@
  * 窗口按角色标记，避免 overlay / splash 被误当成主窗口。
  */
 
-import { BrowserWindow, type WebContents } from 'electron'
+import { app, BrowserWindow, type WebContents } from 'electron'
 
 export type WindowRole = 'main' | 'splash' | 'overlay'
 
@@ -25,7 +25,9 @@ export function focusMainWindow(): void {
   const win = getMainWindow()
   if (win === undefined) return
   if (win.isMinimized()) win.restore()
+  if (process.platform === 'darwin') app.focus({ steal: true })
   win.show()
+  win.moveTop()
   win.focus()
 }
 

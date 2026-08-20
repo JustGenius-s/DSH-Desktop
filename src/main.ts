@@ -20,7 +20,7 @@ import { setupDesktopNotify } from './desktop-notify'
 import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
-import { setWindowRole } from './windows'
+import { focusMainWindow, setWindowRole } from './windows'
 
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
@@ -334,6 +334,11 @@ app.whenReady().then(async () => {
     await installDesktopPlugin()
     await checkDesktopUpdates()
   })()
+})
+
+app.on('activate', () => {
+  // Dock / 托盘激活时 AppKit 常把最上层 panel overlay 当成前台窗。
+  focusMainWindow()
 })
 
 app.on('before-quit', () => {
