@@ -18,6 +18,7 @@ import type {
   DesktopSeatName,
   DesktopUpdateKind,
   DesktopUpdateState,
+  DshChannel,
   DshDesktop,
 } from './api'
 import type { Ipc as IpcShape } from './ipc'
@@ -35,6 +36,7 @@ const Ipc = {
     checkNow: 'desktop:updates:check-now',
     downloadApp: 'desktop:updates:download-app',
     updateDsh: 'desktop:updates:update-dsh',
+    setDshChannel: 'desktop:updates:set-dsh-channel',
     skipVersion: 'desktop:updates:skip-version',
     setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',
@@ -73,6 +75,8 @@ const api: DshDesktop = {
     checkNow: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.checkNow),
     downloadApp: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp),
     updateDsh: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.updateDsh),
+    setDshChannel: (channel: DshChannel, version?: string): Promise<DesktopUpdateState> =>
+      ipcRenderer.invoke(Ipc.updates.setDshChannel, channel, version),
     skipVersion: (kind: DesktopUpdateKind): Promise<void> =>
       ipcRenderer.invoke(Ipc.updates.skipVersion, kind),
     setGate: (kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState> =>

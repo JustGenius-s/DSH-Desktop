@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
+import type { DshChannel } from './api'
 
 /** DSH home（与 CLI 约定一致：`$DSH_HOME` 或 `~/.dsh`）。 */
 export function dshHome(): string {
@@ -125,6 +126,53 @@ export async function ensureDshInstalled(onStatus?: (message: string) => void): 
   const after = installedDshBin()
   if (after === undefined) throw new Error('安装完成但未找到 @deepseek-ai/dsh 的 bin.js')
   return after
+}
+
+/** 查 npm registry 上 `@deepseek-ai/dsh` 的 dist-tags；失败返回 undefined。 */
+async function fetchDshDistTags(): Promise<Record<string, string> | undefined> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await fetch('https://registry.npmjs.org/@deepseek-ai%2Fdsh', { signal: controller.signal })
+    if (!res.ok) return undefined
+    const body = (await res.json()) as { 'dist-tags'?: unknown }
+    const tags = body['dist-tags']
+    if (tags === null || typeof tags !== 'object') return undefined
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(tags as Record<string, unknown>)) {
+      if (typeof value === 'string') out[key] = value
+    }
+    return out
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** 判断一个字符串是否像 npm 包版本（不含 tag 语义）——用于 custom 渠道兜底校验。 */
+export function looksLikeVersion(input: string): boolean {
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(input.trim())
+}
+
+/**
+ * 按更新渠道解析目标版本：
+ * - `latest` / `next`：读 npm dist-tags；标签不存在返回 undefined。
+ * - `custom`：`exact` 指定精确版本直接采用；否则按 channel 解析 dist-tag，
+ *   但只有当结果不含 prerelease（正式版）时才算「渠道已发布」。
+ * 全部失败返回 undefined（调用方静默吞掉，保持现状）。
+ */
+export async function resolveDshChannelVersion(channel: DshChannel, exact?: string): Promise<string | undefined> {
+  const tags = await fetchDshDistTags()
+  if (tags === undefined) return undefined
+  if (channel === 'custom') {
+    const version = (exact ?? '').trim()
+    if (version !== '' && looksLikeVersion(version)) return version
+    return undefined
+  }
+  const version = tags[channel]
+  if (typeof version !== 'string' || version === '') return undefined
+  return version
 }
 
 /** 查 npm registry 上 `@deepseek-ai/dsh` 的最新版本；失败返回 undefined。 */

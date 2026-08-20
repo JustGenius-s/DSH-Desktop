@@ -13,10 +13,10 @@
 import { existsSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
-import type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState } from './api'
+import type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState, DshChannel } from './api'
 import { checkForAppUpdate, compareVersions } from './app-updater'
 import { Ipc } from './ipc'
-import { dshHome, installedDshVersion, latestDshVersion, updateDsh } from './runtime-manager'
+import { dshHome, installedDshVersion, resolveDshChannelVersion, updateDsh } from './runtime-manager'
 
 export type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState } from './api'
 
@@ -38,22 +38,69 @@ function settingsFilePath(): string {
   return join(dshHome(), 'settings.yaml')
 }
 
-/** 从 settings.yaml 读 desktop-update 分节的两个开关（缺失 → 默认 true）。
- *  手写极简解析：只匹配 `desktop-update:` 段内的两个布尔行，避免引入 YAML
- *  依赖；解析失败一律回退默认（开）。 */
+/** 从 settings.yaml 读 desktop-update 分节的两个开关 + DSH 渠道（缺失 → 默认）。
+ *  手写极简解析：只匹配 `desktop-update:` 段内的相关行，避免引入 YAML
+ *  依赖；解析失败一律回退默认。 */
+const DSH_CHANNELS: readonly DshChannel[] = ['latest', 'next', 'custom'] as const
+
+function parseChannel(raw: string | undefined): DshChannel {
+  if (raw !== undefined && (DSH_CHANNELS as readonly string[]).includes(raw)) return raw as DshChannel
+  return 'latest'
+}
+
 export function readUpdateConfig(): DesktopUpdateConfig {
+  const base = { checkApp: true, checkDsh: true, dshChannel: 'latest' as DshChannel, dshVersion: '' }
   try {
     const text = readFileSync(settingsFilePath(), 'utf8')
     const m = /(?:^|\n)desktop-update:\n((?:[ \t]+[^\n]*\n?)*)/.exec(text)
     const section = m?.[1] ?? ''
-    const pick = (key: string): boolean => {
+    const pickBool = (key: string): boolean => {
       const km = new RegExp('(?:^|\\n)\\s*' + key + ':\\s*(true|false)').exec(section)
       return km === null ? true : km[1] === 'true'
     }
-    return { checkApp: pick('checkApp'), checkDsh: pick('checkDsh') }
+    const pickStr = (key: string): string | undefined => {
+      const km = new RegExp('(?:^|\\n)\\s*' + key + ':\\s*([^\\n\\r]+)').exec(section)
+      if (km === null) return undefined
+      const value = km[1].trim().replace(/^(['"])(.*)\\1$/, '$2')
+      return value === '' ? undefined : value
+    }
+    return {
+      checkApp: pickBool('checkApp'),
+      checkDsh: pickBool('checkDsh'),
+      dshChannel: parseChannel(pickStr('dshChannel')),
+      dshVersion: pickStr('dshVersion') ?? '',
+    }
   } catch {
-    return { checkApp: true, checkDsh: true }
+    return { ...base }
   }
+}
+
+/** 渠道 → settings.yaml 的完整 desktop-update 分节（保留文件其余内容）。 */
+export function writeUpdateChannel(channel: DshChannel, version?: string): void {
+  const dshLine = '  dshChannel: ' + channel
+  const versionLine = '  dshVersion: ' + String(version ?? '')
+  let text = ''
+  try {
+    text = readFileSync(settingsFilePath(), 'utf8')
+  } catch {
+    // 文件不存在：从空文档开始。
+  }
+  let next: string
+  if (/(?:^|\n)desktop-update:\n/.test(text)) {
+    next = text.replace(/(^|\n)(desktop-update:\n)((?:[ \t]+[^\n]*\n?)*)/, (_all, head: string, ns: string, body: string) => {
+      const replaceKey = (input: string, key: string, line: string): string => {
+        const keyRe = new RegExp('(^|\\n)\\s*' + key + ':[^\\n]*')
+        return keyRe.test(input) ? input.replace(keyRe, (_m, nl: string) => nl + line) : input + line + '\n'
+      }
+      let newBody = replaceKey(body, 'dshChannel', dshLine)
+      newBody = replaceKey(newBody, 'dshVersion', versionLine)
+      return head + ns + newBody
+    })
+  } else {
+    next = text + (text.endsWith('\n') || text === '' ? '' : '\n') + 'desktop-update:\n' + dshLine + '\n' + versionLine + '\n'
+  }
+  mkdirSync(dirname(settingsFilePath()), { recursive: true })
+  writeFileSync(settingsFilePath(), next)
 }
 
 /** 写一个开关到 settings.yaml 的 desktop-update 分节（保留文件其余内容）。 */
@@ -137,7 +184,9 @@ export async function checkDesktopUpdates(): Promise<DesktopUpdateState> {
     const gates = state.config
     const [appInfo, dshLatest] = await Promise.all([
       gates.checkApp ? checkForAppUpdate().catch(() => undefined) : Promise.resolve(undefined),
-      gates.checkDsh ? latestDshVersion().catch(() => undefined) : Promise.resolve(undefined),
+      gates.checkDsh
+        ? resolveDshChannelVersion(gates.dshChannel ?? 'latest', gates.dshVersion).catch(() => undefined)
+        : Promise.resolve(undefined),
     ])
     const dshInstalled = installedDshVersion()
     const dshInfo: DesktopUpdateInfo | null =
@@ -192,17 +241,39 @@ export function setupDesktopBridge(): void {
     return checkDesktopUpdates()
   })
 
+  // 写 DSH 更新渠道（与插件注册的命名空间共享 settings.yaml 存储），
+  // 随后按新渠道重查一轮并广播结果。
+  ipcMain.handle(Ipc.updates.setDshChannel, async (_event, channel: unknown, version?: unknown) => {
+    if (channel !== 'latest' && channel !== 'next' && channel !== 'custom') return state
+    if (typeof version !== 'string' && version !== undefined) return state
+    writeUpdateChannel(channel, version)
+    await setState({
+      config: {
+        ...state.config,
+        dshChannel: channel,
+        dshVersion: channel === 'custom' ? (version ?? '') : '',
+      },
+    })
+    return checkDesktopUpdates()
+  })
+
   ipcMain.on(Ipc.updates.relaunch, () => {
     app.relaunch()
     app.quit()
   })
 
-  // settings.yaml 也可能被插件半侧或用户手改：监听变化，重读开关并广播
+  // settings.yaml 也可能被插件半侧或用户手改：监听变化，重读开关/渠道并广播
   // （debounce 由 fs.watch 的粗粒度自然承担——一次写入至多触发两轮重读）。
   try {
     settingsWatcher = watch(settingsFilePath(), () => {
       const config = readUpdateConfig()
-      if (config.checkApp !== state.config.checkApp || config.checkDsh !== state.config.checkDsh) {
+      const prev = state.config
+      if (
+        config.checkApp !== prev.checkApp ||
+        config.checkDsh !== prev.checkDsh ||
+        config.dshChannel !== prev.dshChannel ||
+        config.dshVersion !== prev.dshVersion
+      ) {
         void setState({ config }).then(() => checkDesktopUpdates())
       }
     })

@@ -14,6 +14,7 @@ export const Ipc = {
     checkNow: 'desktop:updates:check-now',
     downloadApp: 'desktop:updates:download-app',
     updateDsh: 'desktop:updates:update-dsh',
+    setDshChannel: 'desktop:updates:set-dsh-channel',
     skipVersion: 'desktop:updates:skip-version',
     setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',

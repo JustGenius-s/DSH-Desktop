@@ -22,10 +22,17 @@ export interface DesktopUpdateInfo {
   url?: string
 }
 
-/** 两个自动检查开关（持久化在 DSH settings.yaml 的 desktop-update 分节）。 */
+/** DSH 运行时更新渠道：npm dist-tag，或 `custom` 表示按精确版本匹配。 */
+export type DshChannel = 'latest' | 'next' | 'custom'
+
+/** 两个自动检查开关 + DSH 更新渠道（持久化在 DSH settings.yaml 的 desktop-update 分节）。 */
 export interface DesktopUpdateConfig {
   checkApp: boolean
   checkDsh: boolean
+  /** DSH 运行时匹配渠道；仅 `custom` 时 `dshVersion` 参与。 */
+  dshChannel?: DshChannel
+  /** 精确匹配的版本（dshChannel === 'custom' 时生效）。 */
+  dshVersion?: string
 }
 
 export interface DesktopUpdateState {
@@ -50,6 +57,8 @@ export interface DshDesktopUpdates {
   downloadApp(): Promise<void>
   /** 把 DSH 运行时升到检测到的 latest（完成后需 relaunch）。 */
   updateDsh(): Promise<void>
+  /** 写 DSH 更新渠道；写后立即按新渠道重查并广播。 */
+  setDshChannel(channel: DshChannel, version?: string): Promise<DesktopUpdateState>
   /** 「跳过该版本」：当前 latest 不再提示，出现更新的版本后恢复。 */
   skipVersion(kind: DesktopUpdateKind): Promise<void>
   /** 写一个自动检查开关。 */

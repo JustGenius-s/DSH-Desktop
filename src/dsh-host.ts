@@ -48,7 +48,9 @@ export function findFreePort(): Promise<number> {
  */
 export function startDsh(port: number, bin: string): DshHost {
   const env: NodeJS.ProcessEnv = withBundledBinPath({ ...process.env })
-  const args = [bin, 'web', '--host', DSH_HOST, '--port', String(port)]
+  // --no-open：桌面壳自己用 BrowserWindow 渲染这个 host，不允许 dsh 再拉起
+  // 系统默认浏览器（rc.8 起 web-app 默认会在启动后打开默认浏览器）。
+  const args = [bin, 'web', '--host', DSH_HOST, '--port', String(port), '--no-open']
 
   const child = spawn(bundledNodeBin(), args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
 
