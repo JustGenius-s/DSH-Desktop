@@ -39,6 +39,12 @@ export interface DesktopUpdateState {
   app: DesktopUpdateInfo | null
   dsh: DesktopUpdateInfo | null
   checking: boolean
+  /** 正在执行 `pnpm add @deepseek-ai/dsh@…`。 */
+  updatingDsh: boolean
+  /** 更新过程中的进度/结果文案；空闲时为 null。 */
+  updateMessage: string | null
+  /** 运行时已装完新版本，需 relaunch 才生效。 */
+  needsRelaunch: boolean
   config: DesktopUpdateConfig
   /** 当前安装版本（无更新态弹层用；app 恒有值，dsh 未安装时为 null）。 */
   versions: { app: string; dsh: string | null }

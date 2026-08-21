@@ -23,7 +23,16 @@ export type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState } from 
 /** 后台轮询间隔：6 小时。 */
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000
 
-let state: DesktopUpdateState = { app: null, dsh: null, checking: false, config: readUpdateConfig(), versions: currentVersions() }
+let state: DesktopUpdateState = {
+  app: null,
+  dsh: null,
+  checking: false,
+  updatingDsh: false,
+  updateMessage: null,
+  needsRelaunch: false,
+  config: readUpdateConfig(),
+  versions: currentVersions(),
+}
 
 /** 当前安装版本快照。 */
 function currentVersions(): { app: string; dsh: string | null } {
@@ -219,9 +228,33 @@ export function setupDesktopBridge(): void {
   ipcMain.handle(Ipc.updates.updateDsh, async () => {
     const latest = state.dsh?.latest
     if (latest === undefined) throw new Error('当前没有可更新的 DSH 版本')
-    await updateDsh(latest)
-    // 升级成功后清除 dsh 更新提示；重启后由新 bin 生效。
-    await setState({ dsh: null })
+    if (state.updatingDsh) return
+    await setState({
+      updatingDsh: true,
+      updateMessage: `正在更新 DSH 运行时到 ${latest}…`,
+      needsRelaunch: false,
+    })
+    try {
+      await updateDsh(latest, (message) => {
+        void setState({ updateMessage: message })
+      })
+      // 升级成功后清除 dsh 更新提示；重启后由新 bin 生效。
+      await setState({
+        dsh: null,
+        updatingDsh: false,
+        updateMessage: `已安装 ${latest}，请重启 DSH-Desktop 生效`,
+        needsRelaunch: true,
+        versions: currentVersions(),
+      })
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      await setState({
+        updatingDsh: false,
+        updateMessage: `更新失败：${detail}`,
+        needsRelaunch: false,
+      })
+      throw err
+    }
   })
 
   ipcMain.handle(Ipc.updates.skipVersion, (_event, kind: 'app' | 'dsh') => {

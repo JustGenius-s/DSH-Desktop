@@ -193,6 +193,11 @@ export async function latestDshVersion(): Promise<string | undefined> {
 }
 
 /** 升级到指定版本（由调用方先 `latestDshVersion()` 解析好）。 */
-export function updateDsh(version: string): Promise<void> {
-  return runPnpm(installDshArgs(runtimeDir(), version))
+export async function updateDsh(
+  version: string,
+  onStatus?: (message: string) => void,
+): Promise<void> {
+  onStatus?.(`正在通过 pnpm 安装 @deepseek-ai/dsh@${version}…（约需 1–2 分钟）`)
+  await runPnpm(installDshArgs(runtimeDir(), version))
+  onStatus?.('安装完成，正在校验…')
 }

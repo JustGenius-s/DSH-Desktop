@@ -16,6 +16,7 @@
     "dist:win": "npm run build && npm run collect && electron-builder --win"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "@types/node": "^22.0.0",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
@@ -66,7 +67,11 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "identity": "Electron Dev"
     },
     "win": {
       "icon": "build/icon.ico",
