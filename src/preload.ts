@@ -14,6 +14,8 @@ import type {
   DesktopOverlayMoveSpec,
   DesktopOverlayOpenSpec,
   DesktopOverlayUpdateSpec,
+  DesktopRestartChoice,
+  DesktopRestartPrompt,
   DesktopSeatAction,
   DesktopSeatName,
   DesktopUpdateKind,
@@ -39,6 +41,10 @@ const Ipc = {
     setDshChannel: 'desktop:updates:set-dsh-channel',
     skipVersion: 'desktop:updates:skip-version',
     setGate: 'desktop:updates:set-gate',
+    restartWeb: 'desktop:updates:restart-web',
+    prompt: 'desktop:updates:prompt',
+    promptAck: 'desktop:updates:prompt-ack',
+    promptResponse: 'desktop:updates:prompt-response',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
@@ -81,6 +87,18 @@ const api: DshDesktop = {
       ipcRenderer.invoke(Ipc.updates.skipVersion, kind),
     setGate: (kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState> =>
       ipcRenderer.invoke(Ipc.updates.setGate, kind, enabled),
+    restartWeb: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.restartWeb),
+    onPrompt: (listener: (prompt: DesktopRestartPrompt) => void): (() => void) => {
+      const wrapped = (_event: unknown, prompt: DesktopRestartPrompt) => listener(prompt)
+      ipcRenderer.on(Ipc.updates.prompt, wrapped)
+      return () => ipcRenderer.removeListener(Ipc.updates.prompt, wrapped)
+    },
+    ackPrompt: (id: string): void => {
+      ipcRenderer.send(Ipc.updates.promptAck, id)
+    },
+    respondPrompt: (id: string, choice: DesktopRestartChoice): void => {
+      ipcRenderer.send(Ipc.updates.promptResponse, id, choice)
+    },
     relaunch: (): void => ipcRenderer.send(Ipc.updates.relaunch),
   },
   seats: {

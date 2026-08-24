@@ -30,12 +30,18 @@ const stop = desktop.updates.onState((next) => { /* ... */ })
 await desktop.updates.checkNow()
 await desktop.updates.downloadApp()
 await desktop.updates.updateDsh()
+await desktop.updates.restartWeb() // 热重启 dsh web，桌面壳不退出
+desktop.updates.onPrompt((prompt) => { /* 用 DSH Modal 渲染 */ })
+desktop.updates.ackPrompt(prompt.id)
+desktop.updates.respondPrompt(prompt.id, 'later') // 或 'restart'
 await desktop.updates.skipVersion('app') // 或 'dsh'
 await desktop.updates.setGate('dsh', false)
-desktop.updates.relaunch()
+desktop.updates.relaunch() // 重启整个桌面应用
 ```
 
 `state.app` / `state.dsh` 为 `null` 表示该侧无待处理更新。自动检查开关写在 `~/.dsh/settings.yaml` 的 `desktop-update` 分节。
+
+`restartWeb()` 只杀掉并拉起 `dsh web` 子进程，再刷新主窗口；Electron 壳、席位、托盘都还在。主进程还会监听 `~/.dsh/profiles/web/` 下的 `package.json`、`cordis.patch.yml`、`cordis.yml`：配置变了但当前网页服务还没加载时，通过 `onPrompt` 让桌面插件用 DSH Modal 询问「稍后 / 立即重启服务」（不是系统原生 dialog）。同一份变更点「稍后」后不再烦，再改才再问。插件安装/升级、DSH 运行时更新也走同一套询问，不强制。`relaunch()` 才会退出并拉起整个桌面应用。
 
 ## `seats`
 

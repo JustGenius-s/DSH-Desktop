@@ -98,3 +98,64 @@ export async function waitForReady(port: number, timeoutMs = READY_TIMEOUT_MS, s
   if (signal?.aborted) return
   throw new Error(`dsh host 未在 ${timeoutMs}ms 内就绪（${url}）`)
 }
+
+/** 等子进程退出，最多等 timeoutMs；已退出则立刻返回。 */
+export function onceExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  return new Promise((resolveExit) => {
+    if (child.exitCode !== null) {
+      resolveExit()
+      return
+    }
+    const timer = setTimeout(resolveExit, timeoutMs)
+    const onExit = (): void => {
+      clearTimeout(timer)
+      resolveExit()
+    }
+    child.once('exit', onExit)
+    if (child.exitCode !== null) {
+      child.off('exit', onExit)
+      clearTimeout(timer)
+      resolveExit()
+    }
+  })
+}
+
+/** SIGTERM 后等待，仍在则 SIGKILL。进程已不在时当作成功。 */
+export async function stopDsh(child: ChildProcess, timeoutMs = 3000): Promise<void> {
+  if (child.exitCode !== null) return
+  try {
+    child.kill('SIGTERM')
+  } catch {
+    return
+  }
+  await onceExit(child, timeoutMs)
+  if (child.exitCode === null) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      return
+    }
+    await onceExit(child, 1000)
+  }
+}
+
+function tryListen(port: number): Promise<boolean> {
+  return new Promise((resolveListen) => {
+    const srv = createServer()
+    srv.unref()
+    srv.once('error', () => resolveListen(false))
+    srv.listen(port, DSH_HOST, () => {
+      srv.close(() => resolveListen(true))
+    })
+  })
+}
+
+/** 等回环端口被释放，超时抛错（热重启要尽量复用原端口，避免改 origin）。 */
+export async function waitForPortFree(port: number, timeoutMs = 8000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await tryListen(port)) return
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(`端口 ${port} 在 ${timeoutMs}ms 内未释放`)
+}

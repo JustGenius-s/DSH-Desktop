@@ -52,6 +52,26 @@ export interface DesktopUpdateState {
 
 export type DesktopUpdateKind = 'app' | 'dsh'
 
+/** 询问热重启网页服务的原因。 */
+export type DesktopRestartWebReason = 'plugin' | 'dsh-runtime'
+
+/** 用户对热重启询问的选择。 */
+export type DesktopRestartChoice = 'later' | 'restart'
+
+/**
+ * 主进程推到网页的热重启询问文案。由桌面插件用 DSH Modal 渲染，
+ * 不要走系统原生 dialog。
+ */
+export interface DesktopRestartPrompt {
+  id: string
+  reason: DesktopRestartWebReason
+  title: string
+  message: string
+  detail: string
+  later: string
+  restart: string
+}
+
 export interface DshDesktopUpdates {
   /** 读取当前更新状态快照。 */
   getState(): Promise<DesktopUpdateState>
@@ -61,7 +81,7 @@ export interface DshDesktopUpdates {
   checkNow(): Promise<DesktopUpdateState>
   /** 打开 App 新版本下载页（GitHub Releases）。 */
   downloadApp(): Promise<void>
-  /** 把 DSH 运行时升到检测到的 latest（完成后需 relaunch）。 */
+  /** 把 DSH 运行时升到检测到的 latest（完成后可 restartWeb，无需退出桌面应用）。 */
   updateDsh(): Promise<void>
   /** 写 DSH 更新渠道；写后立即按新渠道重查并广播。 */
   setDshChannel(channel: DshChannel, version?: string): Promise<DesktopUpdateState>
@@ -69,7 +89,15 @@ export interface DshDesktopUpdates {
   skipVersion(kind: DesktopUpdateKind): Promise<void>
   /** 写一个自动检查开关。 */
   setGate(kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState>
-  /** 重启应用。 */
+  /** 热重启 dsh web 子进程并刷新窗口；Electron 壳不退出。 */
+  restartWeb(): Promise<void>
+  /** 订阅主进程的热重启询问；页面用 DSH 组件渲染。 */
+  onPrompt(listener: (prompt: DesktopRestartPrompt) => void): () => void
+  /** 页面已接到询问、即将展示 DSH Modal。 */
+  ackPrompt(id: string): void
+  /** 用户选择「稍后」或「立即重启服务」。 */
+  respondPrompt(id: string, choice: DesktopRestartChoice): void
+  /** 重启整个桌面应用（壳 + 网页服务）。 */
   relaunch(): void
 }
 

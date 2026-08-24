@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path'
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState, DshChannel } from './api'
 import { checkForAppUpdate, compareVersions } from './app-updater'
+import { offerRestartDshWeb, restartDshWeb, setupRestartPromptIpc } from './dsh-lifecycle'
 import { Ipc } from './ipc'
 import { dshHome, installedDshVersion, resolveDshChannelVersion, updateDsh } from './runtime-manager'
 
@@ -216,6 +217,7 @@ export async function checkDesktopUpdates(): Promise<DesktopUpdateState> {
 
 /** 注册 IPC 端点并启动后台轮询；返回当前状态（供启动时首查）。 */
 export function setupDesktopBridge(): void {
+  setupRestartPromptIpc()
   ipcMain.handle(Ipc.updates.getState, () => state)
 
   ipcMain.handle(Ipc.updates.checkNow, () => checkDesktopUpdates())
@@ -238,14 +240,26 @@ export function setupDesktopBridge(): void {
       await updateDsh(latest, (message) => {
         void setState({ updateMessage: message })
       })
-      // 升级成功后清除 dsh 更新提示；重启后由新 bin 生效。
-      await setState({
-        dsh: null,
-        updatingDsh: false,
-        updateMessage: `已安装 ${latest}，请重启 DSH-Desktop 生效`,
-        needsRelaunch: true,
-        versions: currentVersions(),
-      })
+      // 升级成功后清除 dsh 更新提示；弹窗询问是否热重启网页服务（不强制、
+      // 不关壳）：接受且重启成功则新 bin 立即生效；拒绝则保留整壳重启提示。
+      const restarted = await offerRestartDshWeb('dsh-runtime').catch(() => false)
+      await setState(
+        restarted
+          ? {
+              dsh: null,
+              updatingDsh: false,
+              updateMessage: `已更新到 ${latest}，网页服务已热重启`,
+              needsRelaunch: false,
+              versions: currentVersions(),
+            }
+          : {
+              dsh: null,
+              updatingDsh: false,
+              updateMessage: `已安装 ${latest}，请重启 DSH-Desktop 生效`,
+              needsRelaunch: true,
+              versions: currentVersions(),
+            },
+      )
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       await setState({
@@ -256,6 +270,8 @@ export function setupDesktopBridge(): void {
       throw err
     }
   })
+
+  ipcMain.handle(Ipc.updates.restartWeb, () => restartDshWeb())
 
   ipcMain.handle(Ipc.updates.skipVersion, (_event, kind: 'app' | 'dsh') => {
     if (kind !== 'app' && kind !== 'dsh') return

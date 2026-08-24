@@ -17,6 +17,10 @@ export const Ipc = {
     setDshChannel: 'desktop:updates:set-dsh-channel',
     skipVersion: 'desktop:updates:skip-version',
     setGate: 'desktop:updates:set-gate',
+    restartWeb: 'desktop:updates:restart-web',
+    prompt: 'desktop:updates:prompt',
+    promptAck: 'desktop:updates:prompt-ack',
+    promptResponse: 'desktop:updates:prompt-response',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
