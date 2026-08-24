@@ -4,3 +4,5 @@ release/
 runtime/
 *.log
 .pnpm-store/
+.userdata-dev/
+.dsh-dev/.DS_Store

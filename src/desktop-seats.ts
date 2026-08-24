@@ -24,6 +24,7 @@ import {
   type DesktopSeatInfo,
   type DesktopSeatName,
 } from './api'
+import { restartDshWeb } from './dsh-lifecycle'
 import { Ipc } from './ipc'
 import { focusMainWindow, webContentsById } from './windows'
 
@@ -228,6 +229,15 @@ function rebuildApplicationMenu(): void {
       label: 'View',
       submenu: [
         { role: 'reload' },
+        {
+          label: 'Restart DSH Service',
+          accelerator: 'CmdOrCtrl+Shift+R',
+          click: () => {
+            void restartDshWeb().catch((err: unknown) => {
+              console.error('[DSH-Desktop] restart web failed', err)
+            })
+          },
+        },
         { role: 'togglefullscreen' },
         ...(app.isPackaged
           ? []

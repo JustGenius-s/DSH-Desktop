@@ -44,7 +44,7 @@ Electron main process
   └─ BrowserWindow → http://127.0.0.1:<port>
 ```
 
-DSH is installed from npm at runtime, not shipped with the app. Upgrading DSH = detect a newer version on launch → click "Update" → restart. No rebuild or re-signing.
+DSH is installed from npm at runtime, not shipped with the app. Upgrading DSH = detect a newer version on launch → click "Update" → optionally restart the web service (the desktop app stays open). No rebuild or re-signing.
 
 ## Develop
 
