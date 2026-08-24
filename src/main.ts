@@ -12,7 +12,7 @@
 
 import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, session } from 'electron'
+import { app, BrowserWindow, dialog, session, shell } from 'electron'
 import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, stopDsh, waitForPortFree, waitForReady, type DshHost } from './dsh-host'
 import { registerDshWebHost, restartDshWeb } from './dsh-lifecycle'
 import {
@@ -63,6 +63,25 @@ let stopping = false
 let restartingWeb = false
 let restartInFlight: Promise<void> | null = null
 
+/**
+ * 把链接交给系统默认浏览器打开。只放行 http/https：AI 输出里可能出现
+ * `file:`、自定义协议等任意 scheme，直接 openExternal 等于让网页调起
+ * 本机任一协议处理器，必须白名单。返回是否已受理，未受理由调用方拦截。
+ */
+function openInDefaultBrowser(rawUrl: string): boolean {
+  let protocol = ''
+  try {
+    protocol = new URL(rawUrl).protocol
+  } catch {
+    return false
+  }
+  if (protocol !== 'http:' && protocol !== 'https:') return false
+  shell.openExternal(rawUrl).catch((err: unknown) => {
+    console.error(`[DSH-Desktop] 用默认浏览器打开链接失败：${rawUrl}`, err)
+  })
+  return true
+}
+
 function createWindow(url: string): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
@@ -104,6 +123,28 @@ function createWindow(url: string): BrowserWindow {
   win.webContents.on('did-finish-load', () => {
     void applyTitleBarChrome(win)
     enforceRegularDockPolicy()
+  })
+  // AI 输出的超链接不在壳内开新窗口、也不把应用窗口整页跳走：
+  // 1. target=_blank / window.open（AI 链接的常态）→ 拦截新窗口，交给默认浏览器；
+  // 2. 页面发起的整页导航：同源放行（SPA 路由 / 热重启刷新），跨源改为外开。
+  //    主进程 loadURL 不触发 will-navigate，热重启换端口不受影响。
+  // 两者都必须在 loadURL 之前挂上，避免首帧点击打空。
+  const isSameOrigin = (target: string): boolean => {
+    if (dshOrigin === null) return false
+    try {
+      return new URL(target).origin === new URL(dshOrigin).origin
+    } catch {
+      return false
+    }
+  }
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!openInDefaultBrowser(url)) console.warn(`[DSH-Desktop] 已拦截不受支持的弹窗链接：${url}`)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isSameOrigin(url)) return
+    event.preventDefault()
+    if (!openInDefaultBrowser(url)) console.warn(`[DSH-Desktop] 已拦截跨源导航：${url}`)
   })
   void win.loadURL(url)
   return win
