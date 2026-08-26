@@ -20,7 +20,7 @@ import { setupDesktopNotify } from './desktop-notify'
 import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
-import { focusMainWindow, setWindowRole } from './windows'
+import { focusMainWindow, focusWindow, setWindowRole } from './windows'
 
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
@@ -58,7 +58,9 @@ function createWindow(url: string): BrowserWindow {
   win.setMenuBarVisibility(false)
   win.once('ready-to-show', () => {
     refreshDesktopSeats()
-    win.show()
+    // splash 已在主窗口创建前关闭；macOS 可能在这个空档把应用降到后台。
+    // 首次展示也必须显式激活并聚焦，不能只依赖 show()。
+    focusWindow(win)
   })
   win.on('closed', () => {
     if (mainWindow !== win) return
