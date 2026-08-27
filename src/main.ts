@@ -33,7 +33,7 @@ let mainWindow: BrowserWindow | null = null
 let dshOrigin: string | null = null
 let stopping = false
 
-function createWindow(url: string): BrowserWindow {
+function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -58,9 +58,11 @@ function createWindow(url: string): BrowserWindow {
   win.setMenuBarVisibility(false)
   win.once('ready-to-show', () => {
     refreshDesktopSeats()
-    // splash 已在主窗口创建前关闭；macOS 可能在这个空档把应用降到后台。
-    // 首次展示也必须显式激活并聚焦，不能只依赖 show()。
+    // 先显示并前置主窗口，再关 splash：全程保持至少一个可见窗口，避免出现
+    // 「零可见窗口」空档，否则 macOS 会把前台还给 Finder / 上一个前台 App，
+    // 主窗口就会显示在别的窗口后面。
     focusWindow(win)
+    if (!splash.isDestroyed()) splash.close()
   })
   win.on('closed', () => {
     if (mainWindow !== win) return
@@ -299,14 +301,15 @@ app.whenReady().then(async () => {
     return
   }
 
-  splash.close()
   dshOrigin = `http://${DSH_HOST}:${port}`
   // 四族 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify / open 打空。
   setupDesktopBridge()
   setupDesktopSeats()
   setupDesktopNotify()
   setupDesktopOverlays(() => dshOrigin)
-  mainWindow = createWindow(dshOrigin)
+  // splash 不在这里关闭，交给 createWindow 的 ready-to-show 在显示主窗口后关闭，
+  // 确保启动全程始终有可见窗口（见 createWindow 内注释）。
+  mainWindow = createWindow(dshOrigin, splash)
 
   // 有插件被隔离时告知用户，并提供「恢复并重启」入口；恢复后仍崩会被再次隔离。
   if (quarantined.length > 0) {
