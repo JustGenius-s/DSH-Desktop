@@ -25,6 +25,15 @@ import { focusMainWindow, focusWindow, setWindowRole } from './windows'
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
 
+/**
+ * 开发版可以和已安装版同时运行，但两者不能共享 Chromium 数据目录：
+ * 已安装版占用 Service Worker 数据库时，开发版清理同一数据库会永久卡住。
+ * DSH runtime/profile 仍按原约定共用 ~/.dsh，这里只隔离 Electron userData。
+ */
+if (!app.isPackaged) {
+  app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))
+}
+
 let dshProcess: ChildProcess | null = null
 let mainWindow: BrowserWindow | null = null
 let dshOrigin: string | null = null
@@ -206,11 +215,29 @@ async function hardenChromiumStorage(): Promise<void> {
   const sessions = [session.defaultSession, session.fromPartition('persist:dsh-overlay')]
   for (const ses of sessions) {
     try {
-      await ses.clearStorageData({ storages: ['serviceworkers'] })
+      // Chromium 的清理调用在数据库被另一实例占用时可能既不成功也不 reject；
+      // 超时后继续启动，避免 splash 尚未创建时整个应用无界面卡死。
+      await withTimeout(ses.clearStorageData({ storages: ['serviceworkers'] }), 2_000)
     } catch {
       // A leftover SW LevelDB from a previous crash is noisy but not fatal.
     }
   }
+}
+
+function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolveTimeout, rejectTimeout) => {
+    const timer = setTimeout(resolveTimeout, timeoutMs)
+    promise.then(
+      () => {
+        clearTimeout(timer)
+        resolveTimeout()
+      },
+      (err: unknown) => {
+        clearTimeout(timer)
+        rejectTimeout(err)
+      },
+    )
+  })
 }
 
 app.whenReady().then(async () => {
