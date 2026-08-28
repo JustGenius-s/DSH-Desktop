@@ -40,4 +40,10 @@ export const Ipc = {
     list: 'desktop:overlays:list',
     closed: 'desktop:overlays:closed',
   },
+  plugins: {
+    list: 'desktop:plugins:list',
+    setEnabled: 'desktop:plugins:set-enabled',
+    clearFailure: 'desktop:plugins:clear-failure',
+    relaunch: 'desktop:plugins:relaunch',
+  },
 } as const

@@ -14,6 +14,8 @@ import type {
   DesktopOverlayMoveSpec,
   DesktopOverlayOpenSpec,
   DesktopOverlayUpdateSpec,
+  DesktopPluginInfo,
+  DesktopBootFailure,
   DesktopSeatAction,
   DesktopSeatName,
   DesktopUpdateKind,
@@ -61,6 +63,12 @@ const Ipc = {
     close: 'desktop:overlays:close',
     list: 'desktop:overlays:list',
     closed: 'desktop:overlays:closed',
+  },
+  plugins: {
+    list: 'desktop:plugins:list',
+    setEnabled: 'desktop:plugins:set-enabled',
+    clearFailure: 'desktop:plugins:clear-failure',
+    relaunch: 'desktop:plugins:relaunch',
   },
 } satisfies typeof IpcShape
 
@@ -121,6 +129,14 @@ const api: DshDesktop = {
       ipcRenderer.on(Ipc.overlays.closed, wrapped)
       return () => ipcRenderer.removeListener(Ipc.overlays.closed, wrapped)
     },
+  },
+  plugins: {
+    list: (): Promise<{ plugins: DesktopPluginInfo[]; failure: DesktopBootFailure | null }> =>
+      ipcRenderer.invoke(Ipc.plugins.list),
+    setEnabled: (name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(Ipc.plugins.setEnabled, name, enabled),
+    clearFailure: (): Promise<void> => ipcRenderer.invoke(Ipc.plugins.clearFailure),
+    relaunch: (): void => ipcRenderer.send(Ipc.plugins.relaunch),
   },
 }
 

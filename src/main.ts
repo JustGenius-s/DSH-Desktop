@@ -14,19 +14,16 @@ import { join } from 'node:path'
 import { app, BrowserWindow, dialog, session } from 'electron'
 import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, waitForReady, type DshHost } from './dsh-host'
 import { ensureDshInstalled } from './runtime-manager'
-import { extractFailedPlugins, getProfileBundles, quarantineBundle, restoreQuarantined } from './plugin-quarantine'
 import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
 import { setupDesktopNotify } from './desktop-notify'
 import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
+import { openRecoveryWindow, recordBootFailure, setupPluginRecovery } from './plugin-recovery'
 import { focusMainWindow, focusWindow, setWindowRole } from './windows'
 
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
-
-/** 启动失败时「隔离插件 + 重启」的最大轮数，防止归因错误导致死循环。 */
-const MAX_QUARANTINE_RESTARTS = 3
 
 let dshProcess: ChildProcess | null = null
 let mainWindow: BrowserWindow | null = null
@@ -249,23 +246,17 @@ app.whenReady().then(async () => {
   setSplashStatus(splash, '正在检查桌面插件…')
   await installDesktopPlugin()
 
-  // 启动重试循环：失败时从子进程输出归因故障插件并隔离，再重启；归因
-  // 不到或重试耗尽才走原来的报错退出。核心 bundle 永不隔离（见
-  // plugin-quarantine）。
+  // 单次启动：不自动隔离。失败时归因（仅用于高亮）并跳转自建插件管理页，
+  // 由用户决定禁用哪些插件后重启。只有用户明确禁用才会改动 bundles。
   setSplashStatus(splash, '正在启动 DSH 服务…')
-  const quarantined: string[] = []
   let ready = false
   let lastOutput = ''
 
-  for (let attempt = 0; attempt <= MAX_QUARANTINE_RESTARTS; attempt++) {
-    if (attempt > 0) {
-      port = await findFreePort()
-      setSplashStatus(splash, '已隔离故障插件，正在重启 DSH 服务…')
-    }
+  {
     const host = startDsh(port, bin)
     dshProcess = host.child
     host.child.on('exit', (code, signal) => {
-      // 主动退出（before-quit 已置 stopping）或隔离重启的旧进程不弹错误框。
+      // 主动退出（before-quit 已置 stopping）不弹错误框；其余由主流程统一处理。
       if (stopping || dshProcess !== host.child) return
       if (mainWindow && !mainWindow.isDestroyed()) {
         reportError('DSH-Desktop', `DSH 服务意外退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）`)
@@ -275,62 +266,37 @@ app.whenReady().then(async () => {
     const outcome = await waitExitOrReady(host, port)
     if (outcome === 'ready') {
       ready = true
-      break
+    } else {
+      lastOutput = host.recentOutput()
+      if (outcome === 'timeout' && host.child.exitCode === null) {
+        host.child.kill('SIGTERM')
+        await onceExit(host.child, 3000)
+      }
+      if (dshProcess === host.child) dshProcess = null
     }
-
-    lastOutput = host.recentOutput()
-    if (outcome === 'timeout' && host.child.exitCode === null) {
-      host.child.kill('SIGTERM')
-      await onceExit(host.child, 3000)
-    }
-    if (dshProcess === host.child) dshProcess = null
-
-    const disabled = extractFailedPlugins(lastOutput, getProfileBundles()).filter((name) =>
-      quarantineBundle(name, lastOutput),
-    )
-    if (disabled.length === 0) break
-    quarantined.push(...disabled)
-    console.warn(`[DSH-Desktop] 已隔离导致启动失败的插件：${disabled.join(', ')}`)
   }
 
   if (!ready) {
+    recordBootFailure(lastOutput)
+    // 启动失败统一进自建插件管理页：页面展示错误尾部 + 疑似元凶（归因命中时
+    // 高亮）+ 全部插件开关 + 重启。用户禁用疑似插件后重启即可；归因未命中时
+    // 页面仍能展示原始错误尾部并允许用户手动排查插件。
+    setupPluginRecovery()
     splash.close()
-    const tail = lastOutput.trim().split('\n').slice(-5).join('\n')
-    reportError('DSH-Desktop', tail.length > 0 ? `DSH 服务启动失败：\n${tail}` : 'DSH 服务未能就绪')
-    app.quit()
+    openRecoveryWindow()
     return
   }
 
   dshOrigin = `http://${DSH_HOST}:${port}`
-  // 四族 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify / open 打空。
+  // 各 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify / open 打空。
   setupDesktopBridge()
   setupDesktopSeats()
   setupDesktopNotify()
   setupDesktopOverlays(() => dshOrigin)
+  setupPluginRecovery()
   // splash 不在这里关闭，交给 createWindow 的 ready-to-show 在显示主窗口后关闭，
   // 确保启动全程始终有可见窗口（见 createWindow 内注释）。
   mainWindow = createWindow(dshOrigin, splash)
-
-  // 有插件被隔离时告知用户，并提供「恢复并重启」入口；恢复后仍崩会被再次隔离。
-  if (quarantined.length > 0) {
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      title: '已自动禁用故障插件',
-      message: '以下插件导致 DSH 启动失败，已自动禁用：',
-      detail:
-        quarantined.map((n) => `• ${n}`).join('\n') +
-        '\n\n修复插件问题后可选择「恢复并重启」重新启用；若恢复后仍导致启动失败，会被再次自动禁用。',
-      buttons: ['保持禁用', '恢复并重启'],
-      defaultId: 0,
-      cancelId: 0,
-    })
-    if (response === 1) {
-      restoreQuarantined(quarantined)
-      app.relaunch()
-      app.exit(0)
-      return
-    }
-  }
 
   // 更新检查改为后台静默进行：桌面桥负责检测 + 轮询 + 通过 preload 暴露给
   // 网页；dsh-desktop-update 插件（由安装脚本装进 web profile）在侧栏设置

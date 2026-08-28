@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+  <title>DSH-Desktop — 插件恢复</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      background: #151517;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: flex;
+      flex-direction: column;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    header {
+      padding: 22px 28px 0;
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: .3px;
+    }
+    .sub {
+      margin-top: 6px;
+      color: #8b949e;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .alert {
+      margin: 18px 28px 0;
+      padding: 12px 14px;
+      border: 1px solid rgba(210, 90, 80, .45);
+      background: rgba(210, 90, 80, .10);
+      border-radius: 10px;
+      display: none;
+    }
+    .alert.show { display: block; }
+    .alert strong { color: #f0b6ae; font-size: 13px; }
+    .alert .suspected {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #e6c5c0;
+      word-break: break-all;
+    }
+    .alert pre {
+      margin-top: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      line-height: 1.55;
+      color: #c9a29d;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 110px;
+      overflow: auto;
+    }
+    main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 18px 28px 8px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 13px 16px;
+      border: 1px solid #262b33;
+      background: #1b1d22;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .row.suspected {
+      border-color: rgba(210, 90, 80, .6);
+      background: rgba(210, 90, 80, .08);
+    }
+    .row.disabled { opacity: .62; }
+    .info { flex: 1; min-width: 0; }
+    .name {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      word-break: break-all;
+    }
+    .badges { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .badge {
+      font-size: 11px;
+      line-height: 17px;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: #262b33;
+      color: #9aa4b0;
+    }
+    .badge.core { background: rgba(83, 141, 202, .16); color: #9cc4ef; }
+    .badge.own { background: rgba(112, 174, 110, .14); color: #a9d6a5; }
+    .badge.sus {
+      background: rgba(210, 90, 80, .18);
+      color: #f0b6ae;
+    }
+    .badge.off { color: #6f7680; }
+    .switch {
+      position: relative;
+      width: 42px;
+      height: 24px;
+      flex: none;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      inset: 0;
+      background: #30363d;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background .16s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      left: 3px;
+      top: 3px;
+      background: #d7dce2;
+      border-radius: 50%;
+      transition: transform .16s;
+    }
+    .switch input:checked + .slider { background: #4a8ac4; }
+    .switch input:checked + .slider::before { transform: translateX(18px); }
+    .switch input:disabled + .slider { opacity: .4; cursor: not-allowed; }
+    footer {
+      padding: 8px 28px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .hint { flex: 1; font-size: 12px; color: #6f7680; }
+    button {
+      appearance: none;
+      border: 1px solid #2e343d;
+      background: #1b1d22;
+      color: #e6edf3;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 7px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: #3a424d; background: #22262c; }
+    button.primary {
+      background: #4a8ac4;
+      border-color: #4a8ac4;
+      color: #0b0d0f;
+      font-weight: 600;
+    }
+    button.primary:hover:not(:disabled) { background: #5b9bd4; }
+    button:disabled { opacity: .4; cursor: default; }
+    .err {
+      margin: 0 28px 8px;
+      color: #f0b6ae;
+      font-size: 12px;
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>DSH 启动失败 — 插件管理</h1>
+    <div class="sub">以下插件可能阻止了 DSH 启动。你可以禁用疑似元凶（或任何插件）后重新启动；改动立即写入，重启后生效。</div>
+  </header>
+
+  <div class="alert" id="alert">
+    <strong>疑似导致启动失败的插件</strong>
+    <div class="suspected" id="suspected"></div>
+    <pre id="tail"></pre>
+  </div>
+
+  <div class="err" id="err"></div>
+  <main id="list"></main>
+
+  <footer>
+    <span class="hint" id="hint">正在读取插件…</span>
+    <button id="clear">清除失败记录</button>
+    <button class="primary" id="restart">保存并重新启动</button>
+  </footer>
+
+  <script>
+    const api = window.dshDesktop && window.dshDesktop.plugins
+    if (!api) {
+      document.getElementById('hint').textContent = '未检测到桌面插件 API（请从 DSH-Desktop 打开本页）'
+      document.getElementById('restart').disabled = true
+    }
+
+    let plugins = []
+    let failure = null
+    let changed = new Set()
+
+    function render() {
+      const list = document.getElementById('list')
+      list.innerHTML = ''
+      for (const p of plugins) {
+        const row = document.createElement('div')
+        row.className = 'row' + (p.suspected ? ' suspected' : '') + (p.enabled ? '' : ' disabled')
+
+        const info = document.createElement('div')
+        info.className = 'info'
+
+        const name = document.createElement('div')
+        name.className = 'name'
+        name.textContent = p.name
+
+        const badges = document.createElement('div')
+        badges.className = 'badges'
+        if (p.core) badges.appendChild(badge('核心，不可禁用', 'core'))
+        if (p.desktopOwned) badges.appendChild(badge('桌面端插件', 'own'))
+        if (p.suspected) badges.appendChild(badge('疑似元凶', 'sus'))
+        const state = document.createElement('span')
+        state.className = 'badge ' + (p.enabled ? '' : 'off')
+        state.textContent = p.enabled ? '已启用' : '已禁用'
+        badges.appendChild(state)
+
+        info.appendChild(name)
+        info.appendChild(badges)
+
+        const sw = document.createElement('label')
+        sw.className = 'switch'
+        const input = document.createElement('input')
+        input.type = 'checkbox'
+        input.checked = p.enabled
+        input.disabled = p.core
+        input.addEventListener('change', () => {
+          void setEnabled(p, input)
+        })
+        const slider = document.createElement('span')
+        slider.className = 'slider'
+        sw.appendChild(input)
+        sw.appendChild(slider)
+
+        row.appendChild(info)
+        row.appendChild(sw)
+        list.appendChild(row)
+      }
+    }
+
+    function badge(text, cls) {
+      const b = document.createElement('span')
+      b.className = 'badge ' + cls
+      b.textContent = text
+      return b
+    }
+
+    function renderAlert() {
+      const alert = document.getElementById('alert')
+      if (failure && failure.suspected.length > 0) {
+        alert.classList.add('show')
+        document.getElementById('suspected').textContent = failure.suspected.join('、')
+        document.getElementById('tail').textContent = failure.tail || ''
+      } else {
+        alert.classList.remove('show')
+      }
+    }
+
+    async function setEnabled(p, input) {
+      const enabled = input.checked
+      const r = await api.setEnabled(p.name, enabled)
+      if (!r.ok) {
+        document.getElementById('err').textContent = '设置失败：' + (r.error || p.name)
+        input.checked = p.enabled // 还原
+        return
+      }
+      p.enabled = enabled
+      if (p.suspected && !enabled) p.suspected = false
+      document.getElementById('err').textContent = ''
+      render()
+    }
+
+    async function refresh() {
+      const data = await api.list()
+      plugins = data.plugins
+      failure = data.failure
+      render()
+      renderAlert()
+      document.getElementById('hint').textContent =
+        '共 ' + plugins.length + ' 个插件；改动保存后点击「保存并重新启动」生效。'
+    }
+
+    document.getElementById('restart').addEventListener('click', () => {
+      api.relaunch()
+    })
+    document.getElementById('clear').addEventListener('click', async () => {
+      await api.clearFailure()
+      failure = null
+      renderAlert()
+      document.getElementById('err').textContent = ''
+    })
+
+    if (api) void refresh()
+  </script>
+</body>
+</html>

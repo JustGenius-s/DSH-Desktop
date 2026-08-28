@@ -241,17 +241,56 @@ export interface DshDesktopOverlays {
 }
 
 // ---------------------------------------------------------------------------
+// plugins — 插件清单 / 启用禁用（启动失败恢复页）
+// ---------------------------------------------------------------------------
+
+/** 单个 bundle 插件在恢复页里的展示行。 */
+export interface DesktopPluginInfo {
+  /** bundle 包名（如 `@just-genius/dsh-desktop-update`）。 */
+  name: string
+  /** 是否启用（在 profile 的 `dsh.profile.bundles` 里）。 */
+  enabled: boolean
+  /** 核心 bundle（禁了 dsh 更起不来），界面上锁定。 */
+  core: boolean
+  /** 疑似导致本次启动失败的元凶（高亮，不自动禁用）。 */
+  suspected: boolean
+  /** 是否为桌面端自带插件的目录。 */
+  desktopOwned: boolean
+}
+
+/** 启动失败归因结果：故障摘要 + 疑似元凶 bundle 列表。 */
+export interface DesktopBootFailure {
+  /** 最近一次启动失败的输出尾部（最多 5 行），用于展示。 */
+  tail: string
+  /** 疑似元凶 bundle 名（可能为空，此时不归因只列全部）。 */
+  suspected: string[]
+}
+
+/** 插件清单 + 禁用/启用/重启。 */
+export interface DshDesktopPlugins {
+  /** 读全部插件（profile bundles 视图）。 */
+  list(): Promise<{ plugins: DesktopPluginInfo[]; failure: DesktopBootFailure | null }>
+  /** 启用/禁用一个 bundle；核心 bundle 拒绝。 */
+  setEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }>
+  /** 清除桌面端维护的隔离记录（保留 bundles 现状）。 */
+  clearFailure(): Promise<void>
+  /** 重启应用（等同 relaunch）。 */
+  relaunch(): void
+}
+
+// ---------------------------------------------------------------------------
 // root
 // ---------------------------------------------------------------------------
 
 /**
- * 桌面壳注入到网页的标准 API。四族并列：
+ * 桌面壳注入到网页的标准 API。五族并列：
  * updates = 领域动作；seats = 持久原生 UI 贡献；notify = 短暂系统通知；
- * overlays = 同源原生小窗。
+ * overlays = 同源原生小窗；plugins = 插件清单 / 禁用启用。
  */
 export interface DshDesktop {
   updates: DshDesktopUpdates
   seats: DshDesktopSeats
   notify: DshDesktopNotify
   overlays: DshDesktopOverlays
+  plugins: DshDesktopPlugins
 }
