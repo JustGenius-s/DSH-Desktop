@@ -22,8 +22,12 @@ export interface DesktopUpdateInfo {
   url?: string
 }
 
-/** DSH 运行时更新渠道：npm dist-tag，或 `custom` 表示按精确版本匹配。 */
-export type DshChannel = 'latest' | 'next' | 'custom'
+/**
+ * DSH 运行时更新渠道：npm dist-tag，或 `custom` 表示按精确版本匹配。
+ * `alpha` 对应 npm 的 `alpha` dist-tag（上游发 alpha 时不会动 `latest`，
+ * 不加这个渠道的话 alpha 版本永远不会出现在检测结果里）。
+ */
+export type DshChannel = 'latest' | 'next' | 'alpha' | 'custom'
 
 /** 两个自动检查开关 + DSH 更新渠道（持久化在 DSH settings.yaml 的 desktop-update 分节）。 */
 export interface DesktopUpdateConfig {

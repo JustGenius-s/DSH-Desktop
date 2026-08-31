@@ -157,7 +157,9 @@ export function looksLikeVersion(input: string): boolean {
 
 /**
  * 按更新渠道解析目标版本：
- * - `latest` / `next`：读 npm dist-tags；标签不存在返回 undefined。
+ * - `latest` / `next` / `alpha`：读 npm 上同名 dist-tag；标签不存在返回 undefined。
+ *   （`alpha` 是上游发 alpha 时专用的 tag，发 alpha 不会动 `latest`，
+ *   所以必须显式支持这个渠道，否则 alpha 版本永远检测不到。）
  * - `custom`：`exact` 指定精确版本直接采用；否则按 channel 解析 dist-tag，
  *   但只有当结果不含 prerelease（正式版）时才算「渠道已发布」。
  * 全部失败返回 undefined（调用方静默吞掉，保持现状）。

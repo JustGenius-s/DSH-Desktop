@@ -50,7 +50,7 @@ function settingsFilePath(): string {
 /** 从 settings.yaml 读 desktop-update 分节的两个开关 + DSH 渠道（缺失 → 默认）。
  *  手写极简解析：只匹配 `desktop-update:` 段内的相关行，避免引入 YAML
  *  依赖；解析失败一律回退默认。 */
-const DSH_CHANNELS: readonly DshChannel[] = ['latest', 'next', 'custom'] as const
+const DSH_CHANNELS: readonly DshChannel[] = ['latest', 'next', 'alpha', 'custom'] as const
 
 function parseChannel(raw: string | undefined): DshChannel {
   if (raw !== undefined && (DSH_CHANNELS as readonly string[]).includes(raw)) return raw as DshChannel
@@ -277,7 +277,7 @@ export function setupDesktopBridge(): void {
   // 写 DSH 更新渠道（与插件注册的命名空间共享 settings.yaml 存储），
   // 随后按新渠道重查一轮并广播结果。
   ipcMain.handle(Ipc.updates.setDshChannel, async (_event, channel: unknown, version?: unknown) => {
-    if (channel !== 'latest' && channel !== 'next' && channel !== 'custom') return state
+    if (channel !== 'latest' && channel !== 'next' && channel !== 'alpha' && channel !== 'custom') return state
     if (typeof version !== 'string' && version !== undefined) return state
     writeUpdateChannel(channel, version)
     await setState({
