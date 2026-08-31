@@ -25,6 +25,11 @@ const OUTPUT_BUFFER_LIMIT = 64 * 1024
 export interface DshHost {
   child: ChildProcess
   recentOutput: () => string
+  /**
+   * `dsh web:` 打印的启动 URL（新运行时带 `?token=`）。
+   * 尚未打印则为 undefined。
+   */
+  launchUrl: () => string | undefined
 }
 
 /** 分配一个空闲的回环 TCP 端口。 */
@@ -57,8 +62,10 @@ export function startDsh(port: number, bin: string): DshHost {
   // 把 dsh 的日志透传到 Electron 的 stdout/stderr，同时留一份尾部缓冲，
   // 供启动失败时归因故障插件（plugin-quarantine）。
   let output = ''
+  let launchUrl: string | undefined
   const append = (chunk: Buffer) => {
     output = (output + chunk.toString()).slice(-OUTPUT_BUFFER_LIMIT)
+    if (launchUrl === undefined) launchUrl = parsePrintedWebUrl(output, port)
   }
   child.stdout?.on('data', (chunk: Buffer) => {
     process.stdout.write(`[dsh] ${chunk.toString()}`)
@@ -69,32 +76,65 @@ export function startDsh(port: number, bin: string): DshHost {
     append(chunk)
   })
 
-  return { child, recentOutput: () => output }
+  return { child, recentOutput: () => output, launchUrl: () => launchUrl }
 }
 
-/** 探测 host 是否已响应（任意非 5xx 都算「起来了」）。 */
-function probe(url: string): Promise<boolean> {
+/**
+ * 从 dsh 日志抽出 `dsh web: <url>`。只接受本次分配的回环端口，
+ * 避免吃到 LAN 地址或其它进程的打印。
+ */
+export function parsePrintedWebUrl(text: string, port: number): string | undefined {
+  const match = text.match(/(?:^|\n)dsh web: (https?:\/\/[^\s]+)/)
+  if (match === null) return undefined
+  try {
+    const url = new URL(match[1])
+    if (url.hostname !== DSH_HOST || url.port !== String(port)) return undefined
+    return url.href
+  } catch {
+    return undefined
+  }
+}
+
+/** 探测根路径状态码；连不上或超时时返回 undefined。 */
+function probeStatus(url: string): Promise<number | undefined> {
   return new Promise((resolveProbe) => {
     const req = get(url, (res) => {
       res.resume()
-      resolveProbe(res.statusCode !== undefined && res.statusCode < 500)
+      resolveProbe(res.statusCode)
     })
-    req.on('error', () => resolveProbe(false))
+    req.on('error', () => resolveProbe(undefined))
     req.setTimeout(1000, () => {
       req.destroy()
-      resolveProbe(false)
+      resolveProbe(undefined)
     })
   })
 }
 
-/** 轮询直到 host 响应，超时抛错；signal 中止时静默返回（调用方已另有结论）。 */
-export async function waitForReady(port: number, timeoutMs = READY_TIMEOUT_MS, signal?: AbortSignal): Promise<void> {
-  const url = `http://${DSH_HOST}:${port}/`
+/**
+ * 轮询直到可以打开窗口，返回应 load 的 URL。
+ *
+ * 新运行时（0.1.2-alpha 起）根路径无 token 会 401，必须等
+ * `dsh web: http://127.0.0.1:<port>/?token=...` 打印后再打开。
+ * 旧运行时根路径直接出 index（2xx），仍按 origin 打开。
+ * signal 中止时返回 origin（调用方已另有结论）。
+ */
+export async function waitForReady(
+  host: DshHost,
+  port: number,
+  timeoutMs = READY_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<string> {
+  const origin = `http://${DSH_HOST}:${port}`
   const deadline = Date.now() + timeoutMs
   while (!signal?.aborted && Date.now() < deadline) {
-    if (await probe(url)) return
-    await new Promise(r => setTimeout(r, READY_POLL_MS))
+    const printed = host.launchUrl()
+    if (printed !== undefined) return printed
+    const status = await probeStatus(`${origin}/`)
+    if (status !== undefined && status >= 200 && status < 400) return `${origin}/`
+    await new Promise((r) => setTimeout(r, READY_POLL_MS))
   }
-  if (signal?.aborted) return
-  throw new Error(`dsh host 未在 ${timeoutMs}ms 内就绪（${url}）`)
+  const printed = host.launchUrl()
+  if (printed !== undefined) return printed
+  if (signal?.aborted) return `${origin}/`
+  throw new Error(`dsh host 未在 ${timeoutMs}ms 内就绪（${origin}/）`)
 }

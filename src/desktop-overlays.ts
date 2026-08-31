@@ -34,8 +34,10 @@ interface OverlayRow {
 const overlays: OverlayRow[] = []
 const watchedOwners = new Set<number>()
 let getOrigin: () => string | null = () => null
+let getAuthUrl: () => string | null = () => null
 const OVERLAY_PARTITION = 'persist:dsh-overlay'
 let overlaySessionReady = false
+let overlayAuthed = false
 
 function ensureOverlaySession(): Session {
   const ses = session.fromPartition(OVERLAY_PARTITION)
@@ -45,6 +47,33 @@ function ensureOverlaySession(): Session {
     ses.setPermissionCheckHandler(() => false)
   }
   return ses
+}
+
+/**
+ * overlay 用独立 persist partition，拿不到主窗口兑换的 cookie。
+ * 新运行时要先对 `/?token=` 做一次 GET，才能在这个 session 里落鉴权 cookie。
+ */
+async function ensureOverlayAuth(): Promise<void> {
+  if (overlayAuthed) return
+  const authUrl = getAuthUrl()
+  if (authUrl === null) return
+  let url: URL
+  try {
+    url = new URL(authUrl)
+  } catch {
+    overlayAuthed = true
+    return
+  }
+  if (!url.searchParams.has('token')) {
+    overlayAuthed = true
+    return
+  }
+  try {
+    await ensureOverlaySession().fetch(url.href, { redirect: 'manual' })
+  } catch {
+    // 兑换失败不挡 overlay：后续请求会 401，比启动卡死好。
+  }
+  overlayAuthed = true
 }
 
 function preloadFile(): string {
@@ -277,15 +306,27 @@ function isBenignLoadError(err: unknown): boolean {
   return code === 'ERR_ABORTED' || code === 'ERR_FAILED' || /ERR_ABORTED|ERR_FAILED/.test(message)
 }
 
+function isDestroyedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /Object has been destroyed|Render frame was disposed/i.test(message)
+}
+
 async function loadOverlayUrl(win: BrowserWindow, url: string): Promise<void> {
+  if (win.isDestroyed()) return
   try {
     await win.loadURL(url)
     return
   } catch (err) {
-    // Closing a still-loading overlay (replace / settings remount) aborts Chromium
-    // with ERR_FAILED / ERR_ABORTED even when a later window loaded fine.
-    if (win.isDestroyed() && isBenignLoadError(err)) return
-    if (!win.isDestroyed() && win.webContents.getURL() === url && isBenignLoadError(err)) return
+    // Closing a still-loading overlay (replace / settings remount) aborts
+    // Chromium, or throws TypeError once the BrowserWindow is already gone.
+    if (win.isDestroyed() || isDestroyedError(err)) return
+    if (isBenignLoadError(err)) {
+      try {
+        if (win.webContents.getURL() === url) return
+      } catch {
+        return
+      }
+    }
     throw err
   }
 }
@@ -303,7 +344,11 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     const y = spec.bounds.y ?? current.y
     const placed = clampRect(x, y, width, height)
     existing.win.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
-    if (existing.win.webContents.getURL() !== spec.url) await loadOverlayUrl(existing.win, spec.url)
+    if (existing.win.webContents.getURL() !== spec.url) {
+      await ensureOverlayAuth()
+      if (existing.win.isDestroyed()) throw new Error('desktop overlay closed while loading')
+      await loadOverlayUrl(existing.win, spec.url)
+    }
     if (!existing.win.isDestroyed()) existing.win.showInactive()
     return infoOf(existing)
   }
@@ -380,11 +425,17 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   })
 
   try {
+    await ensureOverlayAuth()
+    if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
     await loadOverlayUrl(win, spec.url)
   } catch (err) {
+    const closed = win.isDestroyed()
+      || isDestroyedError(err)
+      || (err instanceof Error && err.message === 'desktop overlay closed while loading')
+    dispose(row, false)
+    if (closed) throw new Error('desktop overlay closed while loading')
     const detail = err instanceof Error ? `${err.message} (${spec.url})` : String(err)
     console.error(`[DSH-Desktop] overlay load failed: ${detail}`)
-    dispose(row, false)
     throw err instanceof Error ? err : new Error('desktop overlay failed to load')
   }
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
@@ -446,8 +497,13 @@ function listFor(sender: WebContents): DesktopOverlayInfo[] {
 }
 
 /** 注册 overlay IPC。必须在 loadURL 之前调用。 */
-export function setupDesktopOverlays(origin: () => string | null): void {
+export function setupDesktopOverlays(
+  origin: () => string | null,
+  authUrl: () => string | null = () => null,
+): void {
   getOrigin = origin
+  getAuthUrl = authUrl
+  overlayAuthed = false
   ensureOverlaySession()
 
   ipcMain.handle(Ipc.overlays.open, async (event, raw: unknown): Promise<DesktopOverlayInfo> => {

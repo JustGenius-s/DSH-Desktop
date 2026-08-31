@@ -2,7 +2,8 @@
  * DSH-Desktop Electron 主进程。
  *
  * 职责：应用就绪后拉起一个 dsh web host 子进程，等它就绪，再开一个
- * BrowserWindow 指向 `http://127.0.0.1:<port>`；退出时负责回收子进程。
+ * BrowserWindow 指向 `dsh web` 打印的启动 URL（新运行时带 `?token=`）；
+ * 退出时负责回收子进程。
  * 前端是纯 web SPA，host 是纯 node 服务，本进程只做编排。
  *
  * 首启可能要先装外置 DSH 运行时（几十秒），期间用一个 splash 窗口给
@@ -37,6 +38,8 @@ if (!app.isPackaged) {
 let dshProcess: ChildProcess | null = null
 let mainWindow: BrowserWindow | null = null
 let dshOrigin: string | null = null
+/** 打开窗口用的 URL：新运行时带启动 token，旧运行时等于 origin。 */
+let dshLaunchUrl: string | null = null
 let stopping = false
 
 function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
@@ -187,13 +190,18 @@ function reportError(title: string, message: string): void {
   dialog.showErrorBox(title, message)
 }
 
-/** 等 dsh 就绪或进程退出；waitForReady 超时返回 'timeout'。 */
-async function waitExitOrReady(host: DshHost, port: number): Promise<'ready' | 'exited' | 'timeout'> {
+/** 等 dsh 就绪或进程退出；就绪时带回应 load 的 URL，超时返回 'timeout'。 */
+async function waitExitOrReady(
+  host: DshHost,
+  port: number,
+): Promise<{ kind: 'ready'; url: string } | { kind: 'exited' | 'timeout' }> {
   const controller = new AbortController()
-  const exited = new Promise<'exited'>((resolveExit) => host.child.once('exit', () => resolveExit('exited')))
-  const ready = waitForReady(port, READY_TIMEOUT_MS, controller.signal).then(
-    () => 'ready' as const,
-    () => 'timeout' as const,
+  const exited = new Promise<{ kind: 'exited' }>((resolveExit) =>
+    host.child.once('exit', () => resolveExit({ kind: 'exited' })),
+  )
+  const ready = waitForReady(host, port, READY_TIMEOUT_MS, controller.signal).then(
+    (url) => ({ kind: 'ready' as const, url }),
+    () => ({ kind: 'timeout' as const }),
   )
   const result = await Promise.race([exited, ready])
   controller.abort()
@@ -276,7 +284,7 @@ app.whenReady().then(async () => {
   // 单次启动：不自动隔离。失败时归因（仅用于高亮）并跳转自建插件管理页，
   // 由用户决定禁用哪些插件后重启。只有用户明确禁用才会改动 bundles。
   setSplashStatus(splash, '正在启动 DSH 服务…')
-  let ready = false
+  let launchUrl: string | undefined
   let lastOutput = ''
 
   {
@@ -291,11 +299,11 @@ app.whenReady().then(async () => {
     })
 
     const outcome = await waitExitOrReady(host, port)
-    if (outcome === 'ready') {
-      ready = true
+    if (outcome.kind === 'ready') {
+      launchUrl = outcome.url
     } else {
       lastOutput = host.recentOutput()
-      if (outcome === 'timeout' && host.child.exitCode === null) {
+      if (outcome.kind === 'timeout' && host.child.exitCode === null) {
         host.child.kill('SIGTERM')
         await onceExit(host.child, 3000)
       }
@@ -303,7 +311,7 @@ app.whenReady().then(async () => {
     }
   }
 
-  if (!ready) {
+  if (launchUrl === undefined) {
     recordBootFailure(lastOutput)
     // 启动失败统一进自建插件管理页：页面展示错误尾部 + 疑似元凶（归因命中时
     // 高亮）+ 全部插件开关 + 重启。用户禁用疑似插件后重启即可；归因未命中时
@@ -315,15 +323,16 @@ app.whenReady().then(async () => {
   }
 
   dshOrigin = `http://${DSH_HOST}:${port}`
+  dshLaunchUrl = launchUrl
   // 各 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify / open 打空。
   setupDesktopBridge()
   setupDesktopSeats()
   setupDesktopNotify()
-  setupDesktopOverlays(() => dshOrigin)
+  setupDesktopOverlays(() => dshOrigin, () => dshLaunchUrl)
   setupPluginRecovery()
   // splash 不在这里关闭，交给 createWindow 的 ready-to-show 在显示主窗口后关闭，
   // 确保启动全程始终有可见窗口（见 createWindow 内注释）。
-  mainWindow = createWindow(dshOrigin, splash)
+  mainWindow = createWindow(dshLaunchUrl, splash)
 
   // 更新检查改为后台静默进行：桌面桥负责检测 + 轮询 + 通过 preload 暴露给
   // 网页；dsh-desktop-update 插件（由安装脚本装进 web profile）在侧栏设置
