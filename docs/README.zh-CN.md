@@ -78,6 +78,11 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 
 壳把 `window.dshDesktop` 注入到 DSH 网页（`updates` / `seats` / `notify` / `overlays`）。插件应依赖这份契约，而不是 Electron 打包代码。见 [desktop-api.md](desktop-api.md)。
 
+其中 `updates` 只做**执行**：壳负责报自己的版本、跑 `pnpm add` 装 DSH 运行时、打开下载页、重启。
+**更新检测不在壳里**——查 GitHub Releases 与 npm registry、比较版本、定时检查都由配套的
+dsh-desktop-update 插件在其 host 半侧完成（跑在 dsh web host 的 Node 进程里，无 CORS 限制，
+也不依赖窗口开着），再通过同源路由把结果提供给网页。
+
 ## 我们的插件
 
 配套 DSH 插件见 [DSH-Plugs](https://github.com/JustGenius-s/DSH-Plugs)。

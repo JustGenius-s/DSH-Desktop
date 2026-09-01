@@ -7,6 +7,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  DesktopBootFailure,
   DesktopContribution,
   DesktopNotifyAction,
   DesktopNotifySpec,
@@ -14,14 +15,15 @@ import type {
   DesktopOverlayMoveSpec,
   DesktopOverlayOpenSpec,
   DesktopOverlayUpdateSpec,
+  DesktopPluginInfo,
   DesktopRestartChoice,
   DesktopRestartPrompt,
   DesktopSeatAction,
   DesktopSeatName,
-  DesktopUpdateKind,
-  DesktopUpdateState,
   DshChannel,
   DshDesktop,
+  DesktopUpdateKind,
+  DesktopUpdateState,
 } from './api'
 import type { Ipc as IpcShape } from './ipc'
 
@@ -33,18 +35,19 @@ import type { Ipc as IpcShape } from './ipc'
 // tsc 都会在这里报错，无需人工同步。
 const Ipc = {
   updates: {
-    getState: 'desktop:updates:get-state',
-    state: 'desktop:updates:state',
-    checkNow: 'desktop:updates:check-now',
+    appVersion: 'desktop:updates:app-version',
     downloadApp: 'desktop:updates:download-app',
     updateDsh: 'desktop:updates:update-dsh',
-    setDshChannel: 'desktop:updates:set-dsh-channel',
-    skipVersion: 'desktop:updates:skip-version',
-    setGate: 'desktop:updates:set-gate',
     restartWeb: 'desktop:updates:restart-web',
     prompt: 'desktop:updates:prompt',
     promptAck: 'desktop:updates:prompt-ack',
     promptResponse: 'desktop:updates:prompt-response',
+    getState: 'desktop:updates:get-state',
+    state: 'desktop:updates:state',
+    checkNow: 'desktop:updates:check-now',
+    setDshChannel: 'desktop:updates:set-dsh-channel',
+    skipVersion: 'desktop:updates:skip-version',
+    setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
@@ -68,26 +71,25 @@ const Ipc = {
     list: 'desktop:overlays:list',
     closed: 'desktop:overlays:closed',
   },
+  plugins: {
+    list: 'desktop:plugins:list',
+    setEnabled: 'desktop:plugins:set-enabled',
+    clearFailure: 'desktop:plugins:clear-failure',
+    relaunch: 'desktop:plugins:relaunch',
+  },
 } satisfies typeof IpcShape
 
 const api: DshDesktop = {
   updates: {
-    getState: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.getState),
-    onState: (listener: (state: DesktopUpdateState) => void): (() => void) => {
-      const wrapped = (_event: unknown, state: DesktopUpdateState) => listener(state)
-      ipcRenderer.on(Ipc.updates.state, wrapped)
-      return () => ipcRenderer.removeListener(Ipc.updates.state, wrapped)
-    },
-    checkNow: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.checkNow),
-    downloadApp: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp),
-    updateDsh: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.updateDsh),
-    setDshChannel: (channel: DshChannel, version?: string): Promise<DesktopUpdateState> =>
-      ipcRenderer.invoke(Ipc.updates.setDshChannel, channel, version),
-    skipVersion: (kind: DesktopUpdateKind): Promise<void> =>
-      ipcRenderer.invoke(Ipc.updates.skipVersion, kind),
-    setGate: (kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState> =>
-      ipcRenderer.invoke(Ipc.updates.setGate, kind, enabled),
+    // ---- 执行端点：正式契约 ----
+    appVersion: (): Promise<string> => ipcRenderer.invoke(Ipc.updates.appVersion),
+    downloadApp: (url?: string): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp, url),
+    updateDsh: (version?: string): Promise<void> =>
+      ipcRenderer.invoke(Ipc.updates.updateDsh, version),
     restartWeb: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.restartWeb),
+    relaunch: (): void => ipcRenderer.send(Ipc.updates.relaunch),
+
+    // ---- 热重启询问：主进程推、页面渲染 Modal 后回执 ----
     onPrompt: (listener: (prompt: DesktopRestartPrompt) => void): (() => void) => {
       const wrapped = (_event: unknown, prompt: DesktopRestartPrompt) => listener(prompt)
       ipcRenderer.on(Ipc.updates.prompt, wrapped)
@@ -99,7 +101,21 @@ const api: DshDesktop = {
     respondPrompt: (id: string, choice: DesktopRestartChoice): void => {
       ipcRenderer.send(Ipc.updates.promptResponse, id, choice)
     },
-    relaunch: (): void => ipcRenderer.send(Ipc.updates.relaunch),
+
+    // ---- 兼容层：仅 0.1.x 旧插件用；新插件的检测在插件 host 半侧 ----
+    getState: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.getState),
+    onState: (listener: (state: DesktopUpdateState) => void): (() => void) => {
+      const wrapped = (_event: unknown, state: DesktopUpdateState) => listener(state)
+      ipcRenderer.on(Ipc.updates.state, wrapped)
+      return () => ipcRenderer.removeListener(Ipc.updates.state, wrapped)
+    },
+    checkNow: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.checkNow),
+    setDshChannel: (channel: DshChannel, version?: string): Promise<DesktopUpdateState> =>
+      ipcRenderer.invoke(Ipc.updates.setDshChannel, channel, version),
+    skipVersion: (kind: DesktopUpdateKind): Promise<void> =>
+      ipcRenderer.invoke(Ipc.updates.skipVersion, kind),
+    setGate: (kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState> =>
+      ipcRenderer.invoke(Ipc.updates.setGate, kind, enabled),
   },
   seats: {
     list: () => ipcRenderer.invoke(Ipc.seats.list),
@@ -139,6 +155,14 @@ const api: DshDesktop = {
       ipcRenderer.on(Ipc.overlays.closed, wrapped)
       return () => ipcRenderer.removeListener(Ipc.overlays.closed, wrapped)
     },
+  },
+  plugins: {
+    list: (): Promise<{ plugins: DesktopPluginInfo[]; failure: DesktopBootFailure | null }> =>
+      ipcRenderer.invoke(Ipc.plugins.list),
+    setEnabled: (name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(Ipc.plugins.setEnabled, name, enabled),
+    clearFailure: (): Promise<void> => ipcRenderer.invoke(Ipc.plugins.clearFailure),
+    relaunch: (): void => ipcRenderer.send(Ipc.plugins.relaunch),
   },
 }
 

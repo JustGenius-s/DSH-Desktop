@@ -2,12 +2,14 @@
  * DSH-Desktop Electron 主进程。
  *
  * 职责：应用就绪后拉起一个 dsh web host 子进程，等它就绪，再开一个
- * BrowserWindow 指向 `http://127.0.0.1:<port>`；退出时负责回收子进程。
+ * BrowserWindow 指向 `dsh web` 打印的启动 URL（新运行时带 `?token=`）；
+ * 退出时负责回收子进程。
  * 运行中可热重启网页服务（不关桌面壳），让插件配置 / DSH 运行时立刻生效。
  * 前端是纯 web SPA，host 是纯 node 服务，本进程只做编排。
  *
  * 首启可能要先装外置 DSH 运行时（几十秒），期间用一个 splash 窗口给
- * 用户进度反馈，装完/就绪后再过渡到主窗口。
+ * 用户进度反馈，装完/就绪后再过渡到主窗口。启动失败则进插件恢复页，
+ * 由用户决定禁用哪些插件后重启（不自动隔离）。
  */
 
 import { type ChildProcess } from 'node:child_process'
@@ -23,20 +25,24 @@ import {
   stopPluginConfigWatch,
 } from './plugin-config-watch'
 import { ensureDshInstalled, installedDshBin } from './runtime-manager'
-import { extractFailedPlugins, getProfileBundles, quarantineBundle, restoreQuarantined } from './plugin-quarantine'
+import { openRecoveryWindow, recordBootFailure, setupPluginRecovery } from './plugin-recovery'
 import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
 import { setupDesktopNotify } from './desktop-notify'
 import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
-import { focusMainWindow, setWindowRole } from './windows'
+import { focusMainWindow, focusWindow, setWindowRole } from './windows'
 
-// 必须在 ready 之前改路径 / 抢锁。unpackaged 的 `electron .` 和已安装的
-// `.app` 共用 package.json 名 `dsh-desktop`，默认会写进同一份
-// Application Support/dsh-desktop（SingletonLock、GPU cache、通知）。
-// 开发态单独开一份，避免验证新代码时把正在用的桌面壳打坏。
+/**
+ * 开发版可以和已安装版同时运行，但两者不能共享 Chromium 数据目录：
+ * 已安装版占用 Service Worker 数据库时，开发版清理同一数据库会永久卡住。
+ * DSH runtime/profile 仍按原约定共用 ~/.dsh，这里只隔离 Electron userData。
+ *
+ * 必须在 ready 之前改路径——上游注释里提到的「第二个窗口期」不存在，
+ * setPath 在 ready 之后改就晚了。
+ */
 if (!app.isPackaged) {
-  app.setPath('userData', join(__dirname, '..', '.userdata-dev'))
+  app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))
 }
 
 const isPrimaryInstance = app.isPackaged ? app.requestSingleInstanceLock() : true
@@ -51,14 +57,13 @@ if (!isPrimaryInstance) {
 /** DSH 深色主题的窗口底色（`--dsw-alias-bg-base` = rgb(21, 21, 23)），让窗口顶部与 DSH UI 无缝融合。 */
 const DSH_BG = '#151517'
 
-/** 启动失败时「隔离插件 + 重启」的最大轮数，防止归因错误导致死循环。 */
-const MAX_QUARANTINE_RESTARTS = 3
-
 let dshProcess: ChildProcess | null = null
 let dshBin: string | undefined
 let dshPort: number | null = null
 let mainWindow: BrowserWindow | null = null
 let dshOrigin: string | null = null
+/** 打开窗口用的 URL：新运行时带启动 token，旧运行时等于 origin。 */
+let dshLaunchUrl: string | null = null
 let stopping = false
 let restartingWeb = false
 let restartInFlight: Promise<void> | null = null
@@ -82,7 +87,7 @@ function openInDefaultBrowser(rawUrl: string): boolean {
   return true
 }
 
-function createWindow(url: string): BrowserWindow {
+function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -107,10 +112,13 @@ function createWindow(url: string): BrowserWindow {
   win.setMenuBarVisibility(false)
   win.once('ready-to-show', () => {
     refreshDesktopSeats()
-    win.show()
-    // 首次显示窗口时系统可能按保存的 UIElement endowment 降级策略（见
-    // enforceRegularDockPolicy），在 show 之后再断言一次以覆盖。
+    // 先显示并前置主窗口，再关 splash：全程保持至少一个可见窗口，避免出现
+    // 「零可见窗口」空档，否则 macOS 会把前台还给 Finder / 上一个前台 App，
+    // 主窗口就会显示在别的窗口后面。
+    focusWindow(win)
+    // 首窗显示也是 Dock 瓷砖最容易被系统压掉的时刻；show 之后立刻拉回。
     enforceRegularDockPolicy()
+    if (!splash.isDestroyed()) splash.close()
   })
   win.on('closed', () => {
     if (mainWindow !== win) return
@@ -271,13 +279,18 @@ function summarizeDshFailure(output: string): string {
   return lines.slice(-5).join('\n')
 }
 
-/** 等 dsh 就绪或进程退出；waitForReady 超时返回 'timeout'。 */
-async function waitExitOrReady(host: DshHost, port: number): Promise<'ready' | 'exited' | 'timeout'> {
+/** 等 dsh 就绪或进程退出；就绪时带回应 load 的 URL，超时返回 'timeout'。 */
+async function waitExitOrReady(
+  host: DshHost,
+  port: number,
+): Promise<{ kind: 'ready'; url: string } | { kind: 'exited' | 'timeout' }> {
   const controller = new AbortController()
-  const exited = new Promise<'exited'>((resolveExit) => host.child.once('exit', () => resolveExit('exited')))
-  const ready = waitForReady(port, READY_TIMEOUT_MS, controller.signal).then(
-    () => 'ready' as const,
-    () => 'timeout' as const,
+  const exited = new Promise<{ kind: 'exited' }>((resolveExit) =>
+    host.child.once('exit', () => resolveExit({ kind: 'exited' })),
+  )
+  const ready = waitForReady(host, port, READY_TIMEOUT_MS, controller.signal).then(
+    (url) => ({ kind: 'ready' as const, url }),
+    () => ({ kind: 'timeout' as const }),
   )
   const result = await Promise.race([exited, ready])
   controller.abort()
@@ -295,52 +308,44 @@ function attachExitHandler(host: DshHost): void {
 }
 
 interface BootResult {
-  ready: boolean
+  /** 打开窗口用的 URL：新运行时带启动 token，旧运行时等于 origin。 */
+  launchUrl: string | null
   port: number
-  quarantined: string[]
   lastOutput: string
 }
 
 /**
- * 拉起 dsh web：失败则归因隔离插件并换端口重试。
- * 成功时更新模块级 dshProcess / dshPort / dshOrigin。
+ * 拉起一次 dsh web，等它就绪。
+ *
+ * 单次启动、不自动隔离：失败时把输出带回给调用方，由启动流程走插件恢复页
+ * （recordBootFailure → openRecoveryWindow），用户自己决定禁用哪些插件再
+ * 重启。只有用户明确禁用才会改动 bundles。
+ *
+ * 成功时更新模块级 dshProcess / dshPort / dshOrigin / dshLaunchUrl。
  */
-async function bootDsh(initialPort: number, bin: string, onStatus?: (message: string) => void): Promise<BootResult> {
-  const quarantined: string[] = []
-  let lastOutput = ''
+async function bootDsh(
+  initialPort: number,
+  bin: string,
+): Promise<BootResult> {
   let port = initialPort
+  const host = startDsh(port, bin)
+  dshProcess = host.child
+  attachExitHandler(host)
 
-  for (let attempt = 0; attempt <= MAX_QUARANTINE_RESTARTS; attempt++) {
-    if (attempt > 0) {
-      port = await findFreePort()
-      onStatus?.('已隔离故障插件，正在重启 DSH 服务…')
-    }
-    const host = startDsh(port, bin)
-    dshProcess = host.child
-    attachExitHandler(host)
-
-    const outcome = await waitExitOrReady(host, port)
-    if (outcome === 'ready') {
-      dshPort = port
-      dshOrigin = `http://${DSH_HOST}:${port}`
-      return { ready: true, port, quarantined, lastOutput }
-    }
-
-    lastOutput = host.recentOutput()
-    if (outcome === 'timeout' && host.child.exitCode === null) {
-      await stopDsh(host.child)
-    }
-    if (dshProcess === host.child) dshProcess = null
-
-    const disabled = extractFailedPlugins(lastOutput, getProfileBundles()).filter((name) =>
-      quarantineBundle(name, lastOutput),
-    )
-    if (disabled.length === 0) break
-    quarantined.push(...disabled)
-    console.warn(`[DSH-Desktop] 已隔离导致启动失败的插件：${disabled.join(', ')}`)
+  const outcome = await waitExitOrReady(host, port)
+  if (outcome.kind === 'ready') {
+    dshPort = port
+    dshOrigin = `http://${DSH_HOST}:${port}`
+    dshLaunchUrl = outcome.url
+    return { launchUrl: outcome.url, port, lastOutput: '' }
   }
 
-  return { ready: false, port, quarantined, lastOutput }
+  const lastOutput = host.recentOutput()
+  if (outcome.kind === 'timeout' && host.child.exitCode === null) {
+    await stopDsh(host.child)
+  }
+  if (dshProcess === host.child) dshProcess = null
+  return { launchUrl: null, port, lastOutput }
 }
 
 /** 热重启网页服务：杀掉当前 dsh 子进程，尽量复用原端口，再刷新主窗口。壳不退出。 */
@@ -371,19 +376,22 @@ async function restartDshWebImpl(): Promise<void> {
         port = await findFreePort()
       }
 
+      // 热重启失败不自动隔离插件（启动流程已改为「提示 + 恢复页由用户决定」）：
+      // 把失败原因摊开给用户看，保持与首次启动一致的处理方式。
       const result = await bootDsh(port, bin)
-      if (!result.ready) {
-        const tail = result.lastOutput.trim().split('\n').slice(-5).join('\n')
-        reportError('DSH-Desktop', tail.length > 0 ? `DSH 服务重启失败：\n${tail}` : 'DSH 服务重启失败')
+      if (result.launchUrl === null) {
+        const summary = summarizeDshFailure(result.lastOutput)
+        const detail = summary === '' ? '' : `\n${summary}`
+        reportError('DSH-Desktop', `DSH 服务重启失败${detail}`)
         throw new Error('DSH 服务重启失败')
       }
 
       markPluginConfigApplied()
 
-      const origin = dshOrigin
+      const launchUrl = dshLaunchUrl
       const win = mainWindow
-      if (origin !== null && win !== null && !win.isDestroyed()) {
-        await win.loadURL(origin)
+      if (launchUrl !== null && win !== null && !win.isDestroyed()) {
+        await win.loadURL(launchUrl)
       }
     } finally {
       restartingWeb = false
@@ -408,11 +416,29 @@ async function hardenChromiumStorage(): Promise<void> {
   const sessions = [session.defaultSession, session.fromPartition('persist:dsh-overlay')]
   for (const ses of sessions) {
     try {
-      await ses.clearStorageData({ storages: ['serviceworkers'] })
+      // Chromium 的清理调用在数据库被另一实例占用时可能既不成功也不 reject；
+      // 超时后继续启动，避免 splash 尚未创建时整个应用无界面卡死。
+      await withTimeout(ses.clearStorageData({ storages: ['serviceworkers'] }), 2_000)
     } catch {
       // A leftover SW LevelDB from a previous crash is noisy but not fatal.
     }
   }
+}
+
+function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolveTimeout, rejectTimeout) => {
+    const timer = setTimeout(resolveTimeout, timeoutMs)
+    promise.then(
+      () => {
+        clearTimeout(timer)
+        resolveTimeout()
+      },
+      (err: unknown) => {
+        clearTimeout(timer)
+        rejectTimeout(err)
+      },
+    )
+  })
 }
 
 app.whenReady().then(async () => {
@@ -455,6 +481,7 @@ app.whenReady().then(async () => {
   // loadProfile 阶段直接抛错。必须在 startDsh 之前修链接；profile 尚未
   // 初始化（首启）则安装脚本会跳过，等 host 就绪后再装一次。
   setSplashStatus(splash, '正在检查桌面插件…')
+  // 安装脚本自己会写 profile 配置，暂停监听免得刚装完就弹「配置已变」。
   {
     const resume = pausePluginConfigWatch()
     try {
@@ -464,54 +491,37 @@ app.whenReady().then(async () => {
     }
   }
 
+  // 单次启动：不自动隔离。失败时归因（仅用于高亮）并跳转自建插件管理页，
+  // 由用户决定禁用哪些插件后重启。只有用户明确禁用才会改动 bundles。
   setSplashStatus(splash, '正在启动 DSH 服务…')
-  const boot = await bootDsh(port, bin, (message) => setSplashStatus(splash, message))
+  const boot = await bootDsh(port, bin)
 
-  if (!boot.ready) {
+  if (boot.launchUrl === null) {
+    recordBootFailure(boot.lastOutput)
+    // 启动失败统一进自建插件管理页：页面展示错误尾部 + 疑似元凶（归因命中时
+    // 高亮）+ 全部插件开关 + 重启。用户禁用疑似插件后重启即可；归因未命中时
+    // 页面仍能展示原始错误尾部并允许用户手动排查插件。
+    setupPluginRecovery()
     splash.close()
-    const tail = boot.lastOutput.trim().split('\n').slice(-5).join('\n')
-    reportError('DSH-Desktop', tail.length > 0 ? `DSH 服务启动失败：\n${tail}` : 'DSH 服务未能就绪')
-    app.quit()
+    openRecoveryWindow()
     return
   }
 
-  splash.close()
-  markPluginConfigApplied()
-  // 四族 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify / open 打空。
+  // 各 IPC 必须在 loadURL 之前挂上，避免插件首帧 contribute / notify / open 打空。
   setupDesktopBridge()
   setupDesktopSeats()
   setupDesktopNotify()
-  setupDesktopOverlays(() => dshOrigin)
-  mainWindow = createWindow(`http://${DSH_HOST}:${boot.port}`)
+  setupDesktopOverlays(() => dshOrigin, () => dshLaunchUrl)
+  setupPluginRecovery()
+  // splash 不在这里关闭，交给 createWindow 的 ready-to-show 在显示主窗口后关闭，
+  // 确保启动全程始终有可见窗口（见 createWindow 内注释）。
+  mainWindow = createWindow(boot.launchUrl, splash)
   startPluginConfigWatch()
 
-  // 有插件被隔离时告知用户，并提供「恢复并重启」入口；恢复后只热重启网页
-  // 服务，不关桌面壳。恢复后仍崩会被再次隔离。
-  if (boot.quarantined.length > 0) {
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      title: '已自动禁用故障插件',
-      message: '以下插件导致 DSH 启动失败，已自动禁用：',
-      detail:
-        boot.quarantined.map((n) => `• ${n}`).join('\n') +
-        '\n\n修复插件问题后可选择「恢复并重启服务」重新启用（桌面应用不会关闭）；若恢复后仍导致启动失败，会被再次自动禁用。',
-      buttons: ['保持禁用', '恢复并重启服务'],
-      defaultId: 0,
-      cancelId: 0,
-    })
-    if (response === 1) {
-      restoreQuarantined(boot.quarantined)
-      try {
-        await restartDshWeb()
-      } catch {
-        // 失败已在 restart 路径里弹过错。
-      }
-    }
-  }
-
-  // 更新检查改为后台静默进行：桌面桥负责检测 + 轮询 + 通过 preload 暴露给
-  // 网页；dsh-desktop-update 插件（由安装脚本装进 web profile）在侧栏设置
-  // 按钮旁渲染更新徽章。安装脚本与首查都不阻塞窗口出现，失败只记日志。
+  // 更新检测已移到 dsh-desktop-update 插件的 host 半侧（跑在 dsh web host
+  // 的 Node 进程里）。这里只把插件装齐，并把「执行」端点挂上；壳侧的兼容层
+  // 检测负责喂 0.1.x 旧插件的更新徽章（见 desktop-bridge.ts 顶部说明）。
+  // 安装不阻塞窗口出现，失败只记日志。
   // 若这次才真正改了插件登记，走统一的「配置已变但未生效」弹窗——不强制。
   void (async () => {
     const resume = pausePluginConfigWatch()

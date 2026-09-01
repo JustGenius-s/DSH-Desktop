@@ -19,9 +19,6 @@ const CORE_BUNDLES = new Set([
   '@deepseek-ai/dsh-web-app',
 ])
 
-/** 单条错误摘要的最大长度。 */
-const MAX_SUMMARY = 300
-
 export interface QuarantineRecord {
   name: string
   disabledAt: string
@@ -135,17 +132,7 @@ export function extractFailedPlugins(output: string, bundles: string[]): string[
   return [...found].filter((n) => thirdParty.includes(n))
 }
 
-/** 从失败输出中截取与该插件相关的首行作为摘要。 */
-function summarize(name: string, output: string): string {
-  const line =
-    output.split('\n').find((l) => l.includes(name)) ??
-    output.trim().split('\n')[0] ??
-    ''
-  return line.trim().slice(0, MAX_SUMMARY)
-}
-
-export function readQuarantine(): QuarantineRecord[] {
-  try {
+export function readQuarantine(): QuarantineRecord[] {  try {
     const data: unknown = JSON.parse(readFileSync(quarantineFilePath(), 'utf8'))
     if (!Array.isArray(data)) return []
     return data.filter(
@@ -169,44 +156,70 @@ export function isQuarantined(name: string): boolean {
   return readQuarantine().some((r) => r.name === name)
 }
 
-/**
- * 把插件从 web profile 的 bundles 中摘除并记录隔离；返回是否实际禁用。
- * dependencies 里的 link: 条目保留：bundle 解析只遍历 bundles 列表，留着
- * 它恢复时无需重建链接。
- */
-export function quarantineBundle(name: string, errorOutput: string): boolean {
-  if (CORE_BUNDLES.has(name)) return false
-  try {
-    const pkgPath = profilePkgPath()
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-    const bundles = pkg.dsh?.profile?.bundles
-    if (!Array.isArray(bundles) || !bundles.includes(name)) return false
-    pkg.dsh.profile.bundles = bundles.filter((b: unknown) => b !== name)
-    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-  } catch (err) {
-    console.warn(`[DSH-Desktop] 禁用插件 ${name} 失败:`, err)
-    return false
-  }
-  const records = readQuarantine().filter((r) => r.name !== name)
-  records.push({ name, disabledAt: new Date().toISOString(), errorSummary: summarize(name, errorOutput) })
-  writeQuarantine(records)
-  return true
+/** 清空全部隔离记录（保持 bundles 现状，不重新启用任何插件）。 */
+export function clearQuarantine(): void {
+  writeQuarantine([])
 }
 
-/** 恢复：把插件加回 bundles 末尾并清除隔离记录。 */
-export function restoreQuarantined(names: string[]): void {
-  if (names.length === 0) return
+/**
+ * 启用/禁用一个 bundle：启用时追加到 bundles 末尾（依赖里的 link: 条目保留，
+ * 便于恢复时无需重建链接），禁用时从 bundles 摘除。核心 bundle 拒绝。
+ * 桌面端自带插件（DESKTOP_OWNED）禁用时额外落一条隔离记录——安装脚本
+ * （plugin-installer）靠它识别「用户已禁用」，否则下次启动会重新登记回来。
+ * @returns 是否实际写入了配置。
+ */
+export function setBundleEnabled(name: string, enabled: boolean): { ok: boolean; error?: string } {
+  if (CORE_BUNDLES.has(name)) return { ok: false, error: `核心插件 ${name} 不可禁用` }
   try {
     const pkgPath = profilePkgPath()
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
     pkg.dsh ??= {}
     pkg.dsh.profile ??= {}
     const bundles: unknown[] = Array.isArray(pkg.dsh.profile.bundles) ? pkg.dsh.profile.bundles : []
-    pkg.dsh.profile.bundles = [...bundles, ...names.filter((n) => !bundles.includes(n))]
+    const names = bundles.filter((b): b is string => typeof b === 'string')
+    const present = names.includes(name)
+    if (enabled && !present) {
+      pkg.dsh.profile.bundles = [...names, name]
+    } else if (!enabled && present) {
+      pkg.dsh.profile.bundles = names.filter((b) => b !== name)
+    } else {
+      syncDisabledMark(name, enabled)
+      return { ok: true } // 已是目标状态，无写入。
+    }
     writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+    syncDisabledMark(name, enabled)
+    return { ok: true }
   } catch (err) {
-    console.warn('[DSH-Desktop] 恢复插件失败:', err)
-    return
+    const detail = err instanceof Error ? err.message : String(err)
+    console.warn(`[DSH-Desktop] 设置插件 ${name} ${enabled ? '启用' : '禁用'}失败:`, err)
+    return { ok: false, error: detail }
   }
-  writeQuarantine(readQuarantine().filter((r) => !names.includes(r.name)))
+}
+
+/** 桌面端自带插件（在 bundles 之外也登记了 link: 依赖）的目录清单。 */
+const DESKTOP_OWNED = new Set(['@just-genius/dsh-desktop-update'])
+
+/** 桌面端自带插件禁用时落/清隔离记录，让安装脚本不再自动重新登记。 */
+function syncDisabledMark(name: string, enabled: boolean): void {
+  if (!DESKTOP_OWNED.has(name)) return
+  const records = readQuarantine().filter((r) => r.name !== name)
+  if (!enabled) {
+    records.push({ name, disabledAt: new Date().toISOString(), errorSummary: '用户已在插件列表禁用' })
+  }
+  writeQuarantine(records)
+}
+
+/**
+ * 插件清单视图：bundles 里的是启用态；桌面端自带插件即使不在 bundles 里
+ * 也列出（禁用态），让用户能重新启用。核心 bundle 恒在列表并锁定。
+ */
+export function listPlugins(): { name: string; enabled: boolean; core: boolean; desktopOwned: boolean }[] {
+  const bundles = getProfileBundles()
+  const names = new Set<string>([...CORE_BUNDLES, ...bundles, ...DESKTOP_OWNED])
+  return [...names].map((name) => ({
+    name,
+    enabled: bundles.includes(name),
+    core: CORE_BUNDLES.has(name),
+    desktopOwned: DESKTOP_OWNED.has(name),
+  }))
 }

@@ -9,18 +9,22 @@
 
 export const Ipc = {
   updates: {
-    getState: 'desktop:updates:get-state',
-    state: 'desktop:updates:state',
-    checkNow: 'desktop:updates:check-now',
+    // 执行端点只有壳做得到，正式契约。
+    appVersion: 'desktop:updates:app-version',
     downloadApp: 'desktop:updates:download-app',
     updateDsh: 'desktop:updates:update-dsh',
-    setDshChannel: 'desktop:updates:set-dsh-channel',
-    skipVersion: 'desktop:updates:skip-version',
-    setGate: 'desktop:updates:set-gate',
     restartWeb: 'desktop:updates:restart-web',
+    // 热重启询问：主进程推给网页，网页用 DSH Modal 渲染后回 ack / 选择。
     prompt: 'desktop:updates:prompt',
     promptAck: 'desktop:updates:prompt-ack',
     promptResponse: 'desktop:updates:prompt-response',
+    // 兼容层：仅 0.1.x 旧插件用，新插件的检测在插件 host 半侧。
+    getState: 'desktop:updates:get-state',
+    state: 'desktop:updates:state',
+    checkNow: 'desktop:updates:check-now',
+    setDshChannel: 'desktop:updates:set-dsh-channel',
+    skipVersion: 'desktop:updates:skip-version',
+    setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
@@ -43,5 +47,11 @@ export const Ipc = {
     close: 'desktop:overlays:close',
     list: 'desktop:overlays:list',
     closed: 'desktop:overlays:closed',
+  },
+  plugins: {
+    list: 'desktop:plugins:list',
+    setEnabled: 'desktop:plugins:set-enabled',
+    clearFailure: 'desktop:plugins:clear-failure',
+    relaunch: 'desktop:plugins:relaunch',
   },
 } as const

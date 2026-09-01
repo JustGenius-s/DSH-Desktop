@@ -1,13 +1,23 @@
 /**
- * 桌面更新桥：主进程侧的更新状态机 + IPC 端点。
+ * 桌面更新桥：主进程侧的更新「执行器」+ 兼容层 IPC 端点。
  *
- * 后台静默检测 App 本体（GitHub Releases）与 DSH 运行时（npm）的新版本，
- * 状态变化推给所有窗口；preload 以 window.dshDesktop.updates 暴露给网页，
- * 由 dsh-desktop-update 客户端插件在侧栏设置按钮旁渲染更新徽章。
+ * ── 0.2.0 的职责划分 ──────────────────────────────────────────
+ * 检测（查 GitHub Releases / npm registry、比版本、定期间隔）已迁到
+ * dsh-desktop-update 插件的 host 半侧：它跑在 dsh web host 的 Node 进程里，
+ * 没有 CORS 限制，也不依赖某个窗口开着。新插件走那条路。
  *
- * 「跳过该版本」按版本号记录：被跳过的 latest 不再提示，出现更新的版本后
- * 自动恢复提示。与旧版「不再提示」（永久关闭）不同——徽章模式不打扰用户，
- * 没有永久关闭的必要。
+ * 但 npm 上目前还没有 0.2.0 的插件，已装的还是 0.1.x（REQUIRED_VERSION 停在
+ * 0.1.2，见 scripts/install-desktop-plugin.mjs）：它们只认壳侧的 getState /
+ * checkNow / setGate / setDshChannel / skipVersion。这批端点连同状态机一起
+ * 保留成「兼容层」，让旧插件不至于连更新徽章都拿不到；等 0.2.0 插件发布、
+ * REQUIRED_VERSION 提上去之后，本文件可以只留执行端点。
+ *
+ * ── 壳独有的执行能力 ──────────────────────────────────────────
+ * 只有打包后的桌面应用做得到：报自己的版本号、跑 `pnpm add` 装运行时、
+ * 用系统浏览器打开下载页、热重启网页服务、重启整个应用。
+ *
+ * 其中 restartWeb 是本分支加的：装完运行时 / 插件配置变了之后，不再强制
+ * `app.relaunch()`，只杀掉并拉起 `dsh web` 子进程再刷新窗口，桌面壳不退出。
  */
 
 import { existsSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
@@ -17,11 +27,19 @@ import type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState, DshCha
 import { checkForAppUpdate, compareVersions } from './app-updater'
 import { offerRestartDshWeb, restartDshWeb, setupRestartPromptIpc } from './dsh-lifecycle'
 import { Ipc } from './ipc'
-import { dshHome, installedDshVersion, resolveDshChannelVersion, updateDsh } from './runtime-manager'
+import {
+  dshHome,
+  installedDshVersion,
+  resolveDshChannelVersion,
+  updateDsh,
+} from './runtime-manager'
 
 export type { DesktopUpdateConfig, DesktopUpdateInfo, DesktopUpdateState } from './api'
 
-/** 后台轮询间隔：6 小时。 */
+/** 兜底下载页：插件未给出具体 release URL 时用它。 */
+const RELEASES_FALLBACK = 'https://github.com/JustGenius-s/DSH-Desktop/releases/latest'
+
+/** 兼容层后台轮询间隔：6 小时。新插件的检测间隔由它自己的 host 半侧决定。 */
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 let state: DesktopUpdateState = {
@@ -35,23 +53,26 @@ let state: DesktopUpdateState = {
   versions: currentVersions(),
 }
 
+let pollTimer: NodeJS.Timeout | null = null
+let settingsWatcher: FSWatcher | null = null
+
 /** 当前安装版本快照。 */
 function currentVersions(): { app: string; dsh: string | null } {
   return { app: app.getVersion(), dsh: installedDshVersion() ?? null }
 }
-let pollTimer: NodeJS.Timeout | null = null
-let settingsWatcher: FSWatcher | null = null
 
+// ---------------------------------------------------------------------------
+// settings.yaml 读写（兼容层）：desktop-update 分节的开关与渠道
+// ---------------------------------------------------------------------------
 
 /** DSH settings.yaml 路径（dsh-settings-file 的默认文档位置）。 */
 function settingsFilePath(): string {
   return join(dshHome(), 'settings.yaml')
 }
 
-/** 从 settings.yaml 读 desktop-update 分节的两个开关 + DSH 渠道（缺失 → 默认）。
- *  手写极简解析：只匹配 `desktop-update:` 段内的相关行，避免引入 YAML
- *  依赖；解析失败一律回退默认。 */
-const DSH_CHANNELS: readonly DshChannel[] = ['latest', 'next', 'custom'] as const
+/** 手写极简解析：只匹配 `desktop-update:` 段内的相关行，避免引入 YAML 依赖；
+ *  解析失败一律回退默认。 */
+const DSH_CHANNELS: readonly DshChannel[] = ['latest', 'next', 'alpha', 'custom'] as const
 
 function parseChannel(raw: string | undefined): DshChannel {
   if (raw !== undefined && (DSH_CHANNELS as readonly string[]).includes(raw)) return raw as DshChannel
@@ -125,7 +146,6 @@ export function writeUpdateGate(kind: 'app' | 'dsh', enabled: boolean): void {
   }
   let next: string
   if (/(?:^|\n)desktop-update:\n/.test(text)) {
-    // 分节已存在：替换对应键（缺失则追加到分节尾）。
     next = text.replace(/(^|\n)(desktop-update:\n)((?:[ \t]+[^\n]*\n?)*)/, (_all, head: string, ns: string, body: string) => {
       const keyRe = new RegExp('(^|\\n)\\s*' + key + ':[^\\n]*')
       const newBody = keyRe.test(body)
@@ -140,7 +160,11 @@ export function writeUpdateGate(kind: 'app' | 'dsh', enabled: boolean): void {
   writeFileSync(settingsFilePath(), next)
 }
 
-/** 「跳过该版本」记录：kind → 被跳过的 latest 版本号。 */
+// ---------------------------------------------------------------------------
+// 「跳过该版本」记录（兼容层）
+// ---------------------------------------------------------------------------
+
+/** kind → 被跳过的 latest 版本号。 */
 function skipFilePath(): string {
   return join(app.getPath('userData'), 'desktop-update-skip.json')
 }
@@ -161,7 +185,7 @@ function readSkipped(): Record<string, string> {
 function writeSkipped(map: Record<string, string>): void {
   try {
     mkdirSync(dirname(skipFilePath()), { recursive: true })
-    writeFileSync(skipFilePath(), JSON.stringify(map, null, 2) + "\n")
+    writeFileSync(skipFilePath(), JSON.stringify(map, null, 2) + '\n')
   } catch {
     // 写失败无妨：最坏只是本次跳过不生效。
   }
@@ -174,6 +198,10 @@ function applySkip(info: DesktopUpdateInfo | null, kind: 'app' | 'dsh'): Desktop
   if (skipped !== undefined && compareVersions(info.latest, skipped) <= 0) return null
   return info
 }
+
+// ---------------------------------------------------------------------------
+// 兼容层状态机
+// ---------------------------------------------------------------------------
 
 function broadcast(): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -200,7 +228,10 @@ export async function checkDesktopUpdates(): Promise<DesktopUpdateState> {
     ])
     const dshInstalled = installedDshVersion()
     const dshInfo: DesktopUpdateInfo | null =
-      gates.checkDsh && dshLatest !== undefined && dshInstalled !== undefined && compareVersions(dshLatest, dshInstalled) > 0
+      gates.checkDsh &&
+      dshLatest !== undefined &&
+      dshInstalled !== undefined &&
+      compareVersions(dshLatest, dshInstalled) > 0
         ? { current: dshInstalled, latest: dshLatest }
         : null
     await setState({
@@ -215,22 +246,42 @@ export async function checkDesktopUpdates(): Promise<DesktopUpdateState> {
   return state
 }
 
-/** 注册 IPC 端点并启动后台轮询；返回当前状态（供启动时首查）。 */
+// ---------------------------------------------------------------------------
+// IPC 端点
+// ---------------------------------------------------------------------------
+
+/** 注册 IPC 端点并启动兼容层轮询。分两组：执行端点（正式契约）与兼容端点。 */
 export function setupDesktopBridge(): void {
   setupRestartPromptIpc()
-  ipcMain.handle(Ipc.updates.getState, () => state)
 
-  ipcMain.handle(Ipc.updates.checkNow, () => checkDesktopUpdates())
+  // ---- 执行端点：只有壳做得到 ----
 
-  ipcMain.handle(Ipc.updates.downloadApp, () => {
-    const url = state.app?.url
-    if (url !== undefined) void shell.openExternal(url)
+  // 壳自己的版本。插件需要它才能判断「有没有比我新的 App 发布」。
+  ipcMain.handle(Ipc.updates.appVersion, () => app.getVersion())
+
+  // 打开 App 发布页。URL 由插件给出（只有它知道 latest 是哪个 release），
+  // 壳只负责用系统浏览器打开，并只接受 GitHub 地址，避免被网页带着开任意 URL。
+  ipcMain.handle(Ipc.updates.downloadApp, (_event, url: unknown) => {
+    const target =
+      typeof url === 'string' && /^https:\/\/github\.com\//.test(url) ? url : RELEASES_FALLBACK
+    void shell.openExternal(target)
   })
 
-  ipcMain.handle(Ipc.updates.updateDsh, async () => {
-    const latest = state.dsh?.latest
+  // 把 DSH 运行时装成指定版本。版本由新插件给出；旧插件（0.1.x）不传版本，
+  // 由壳按当前渠道解析——它们不知道自己在跟哪个版本的壳说话。
+  // 装完后问一句是否热重启网页服务：接受则新版本立即生效，不必整壳重启。
+  ipcMain.handle(Ipc.updates.updateDsh, async (_event, version: unknown) => {
+    if (updating) throw new Error('已有更新在进行中')
+    const target =
+      typeof version === 'string' && version !== ''
+        ? version
+        : await resolveDshChannelVersion(state.config.dshChannel ?? 'latest', state.config.dshVersion)
+    // 旧插件走的兼容路径：没传版本时，优先用它正看着的那条提示里的 latest
+    // （它刚刚才点下「更新」，state 里就是它期望的版本）。
+    const latest = target ?? state.dsh?.latest
     if (latest === undefined) throw new Error('当前没有可更新的 DSH 版本')
-    if (state.updatingDsh) return
+
+    updating = true
     await setState({
       updatingDsh: true,
       updateMessage: `正在更新 DSH 运行时到 ${latest}…`,
@@ -268,10 +319,24 @@ export function setupDesktopBridge(): void {
         needsRelaunch: false,
       })
       throw err
+    } finally {
+      updating = false
     }
   })
 
+  // 热重启网页服务：杀掉并拉起 dsh web 子进程，刷新主窗口，桌面壳不退出。
   ipcMain.handle(Ipc.updates.restartWeb, () => restartDshWeb())
+
+  ipcMain.on(Ipc.updates.relaunch, () => {
+    app.relaunch()
+    app.quit()
+  })
+
+  // ---- 兼容端点：仅 0.1.x 旧插件使用，新插件请用插件 host 半侧的检测 ----
+
+  ipcMain.handle(Ipc.updates.getState, () => state)
+
+  ipcMain.handle(Ipc.updates.checkNow, () => checkDesktopUpdates())
 
   ipcMain.handle(Ipc.updates.skipVersion, (_event, kind: 'app' | 'dsh') => {
     if (kind !== 'app' && kind !== 'dsh') return
@@ -286,14 +351,18 @@ export function setupDesktopBridge(): void {
   ipcMain.handle(Ipc.updates.setGate, async (_event, kind: 'app' | 'dsh', enabled: unknown) => {
     if ((kind !== 'app' && kind !== 'dsh') || typeof enabled !== 'boolean') return state
     writeUpdateGate(kind, enabled)
-    await setState({ config: { ...state.config, [kind === 'app' ? 'checkApp' : 'checkDsh']: enabled } })
+    await setState({
+      config: { ...state.config, [kind === 'app' ? 'checkApp' : 'checkDsh']: enabled },
+    })
     return checkDesktopUpdates()
   })
 
   // 写 DSH 更新渠道（与插件注册的命名空间共享 settings.yaml 存储），
   // 随后按新渠道重查一轮并广播结果。
   ipcMain.handle(Ipc.updates.setDshChannel, async (_event, channel: unknown, version?: unknown) => {
-    if (channel !== 'latest' && channel !== 'next' && channel !== 'custom') return state
+    if (channel !== 'latest' && channel !== 'next' && channel !== 'alpha' && channel !== 'custom') {
+      return state
+    }
     if (typeof version !== 'string' && version !== undefined) return state
     writeUpdateChannel(channel, version)
     await setState({
@@ -306,13 +375,7 @@ export function setupDesktopBridge(): void {
     return checkDesktopUpdates()
   })
 
-  ipcMain.on(Ipc.updates.relaunch, () => {
-    app.relaunch()
-    app.quit()
-  })
-
-  // settings.yaml 也可能被插件半侧或用户手改：监听变化，重读开关/渠道并广播
-  // （debounce 由 fs.watch 的粗粒度自然承担——一次写入至多触发两轮重读）。
+  // settings.yaml 也可能被插件半侧或用户手改：监听变化，重读开关/渠道并广播。
   try {
     settingsWatcher = watch(settingsFilePath(), () => {
       const config = readUpdateConfig()
@@ -337,8 +400,5 @@ export function setupDesktopBridge(): void {
   pollTimer.unref()
 }
 
-/** 跳过记录文件是否已存在（仅测试与调试便利）。 */
-export function desktopUpdateSkipFileExists(): boolean {
-  return existsSync(skipFilePath())
-}
-
+/** 串行保护：pnpm 装运行时要一两分钟，不允许并发跑。 */
+let updating = false

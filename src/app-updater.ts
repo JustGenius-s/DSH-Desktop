@@ -3,11 +3,15 @@
  * 检测结果由 desktop-bridge.ts 聚合并经 preload 暴露给网页（更新徽章）。
  * 与 DSH 运行时升级（runtime-manager.ts 管 `@deepseek-ai/dsh` 包）是两回事
  * ——这里只管桌面 App 自己，只做「检测 + 提示跳下载」，不做静默自动安装。
+ *
+ * 注意：0.2.0 起新插件的检测已迁到 dsh-desktop-update 插件的 host 半侧，
+ * 本模块只服务壳侧兼容层——已装的插件可能还是 0.1.x（npm 上暂无 0.2.0），
+ * 它们只认壳侧的 getState / checkNow。等 0.2.0 插件发布后可以删掉本文件。
  */
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app } from 'electron'
+import { app, session } from 'electron'
 
 /**
  * GitHub Releases 的 latest 网页地址（非 REST API）。它 302 跳转到
@@ -90,7 +94,8 @@ export async function latestAppRelease(): Promise<{ version: string; url: string
   const timer = setTimeout(() => controller.abort(), 10_000)
   try {
     // redirect:'manual' 拿到 302 的 Location，不跟随跳转（省一次整页下载）。
-    const res = await fetch(RELEASES_URL, {
+    // session.fetch 走 Chromium 栈，不触发 Node TLS，绕开打包版 SetRootCerts 崩溃。
+    const res = await session.defaultSession.fetch(RELEASES_URL, {
       signal: controller.signal,
       redirect: 'manual',
       headers: { 'User-Agent': 'DSH-Desktop' },
