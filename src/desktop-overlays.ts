@@ -5,7 +5,7 @@
  */
 
 import { join } from 'node:path'
-import { BrowserWindow, ipcMain, screen, session, type Session, type WebContents } from 'electron'
+import { BrowserWindow, ipcMain, screen, type WebContents } from 'electron'
 import {
   DESKTOP_ID_RE,
   type DesktopOverlayBounds,
@@ -34,47 +34,6 @@ interface OverlayRow {
 const overlays: OverlayRow[] = []
 const watchedOwners = new Set<number>()
 let getOrigin: () => string | null = () => null
-let getAuthUrl: () => string | null = () => null
-const OVERLAY_PARTITION = 'persist:dsh-overlay'
-let overlaySessionReady = false
-let overlayAuthed = false
-
-function ensureOverlaySession(): Session {
-  const ses = session.fromPartition(OVERLAY_PARTITION)
-  if (!overlaySessionReady) {
-    overlaySessionReady = true
-    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
-    ses.setPermissionCheckHandler(() => false)
-  }
-  return ses
-}
-
-/**
- * overlay 用独立 persist partition，拿不到主窗口兑换的 cookie。
- * 新运行时要先对 `/?token=` 做一次 GET，才能在这个 session 里落鉴权 cookie。
- */
-async function ensureOverlayAuth(): Promise<void> {
-  if (overlayAuthed) return
-  const authUrl = getAuthUrl()
-  if (authUrl === null) return
-  let url: URL
-  try {
-    url = new URL(authUrl)
-  } catch {
-    overlayAuthed = true
-    return
-  }
-  if (!url.searchParams.has('token')) {
-    overlayAuthed = true
-    return
-  }
-  try {
-    await ensureOverlaySession().fetch(url.href, { redirect: 'manual' })
-  } catch {
-    // 兑换失败不挡 overlay：后续请求会 401，比启动卡死好。
-  }
-  overlayAuthed = true
-}
 
 function preloadFile(): string {
   return join(__dirname, 'preload.js')
@@ -270,15 +229,9 @@ function applyIgnore(win: BrowserWindow, mode: DesktopOverlayIgnoreMouse | undef
   else win.setIgnoreMouseEvents(false)
 }
 
-function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
-  if (enabled) {
-    if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'screen-saver')
-    else win.setAlwaysOnTop(true)
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  } else {
-    win.setAlwaysOnTop(false)
-    win.setVisibleOnAllWorkspaces(false)
-  }
+function applyAlwaysOnTop(_win: BrowserWindow, _enabled: boolean): void {
+  // 不调用 setAlwaysOnTop / setVisibleOnAllWorkspaces：
+  // 主窗口应靠系统前台调度；这两套 API 在签名 .app 里会偶发 SIGSEGV。
 }
 
 function applyChrome(win: BrowserWindow, chrome: DesktopOverlayChrome, initial: boolean): void {
@@ -345,11 +298,10 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     const placed = clampRect(x, y, width, height)
     existing.win.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
     if (existing.win.webContents.getURL() !== spec.url) {
-      await ensureOverlayAuth()
       if (existing.win.isDestroyed()) throw new Error('desktop overlay closed while loading')
       await loadOverlayUrl(existing.win, spec.url)
     }
-    if (!existing.win.isDestroyed()) existing.win.showInactive()
+    if (!existing.win.isDestroyed()) existing.win.show()
     return infoOf(existing)
   }
 
@@ -371,8 +323,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     height: placed.height,
     transparent,
     frame,
-    type: !frame && process.platform === 'darwin' ? 'panel' : undefined,
-    alwaysOnTop: chrome.alwaysOnTop === true,
+    alwaysOnTop: false,
     focusable: false,
     show: false,
     resizable: chrome.resizable === true,
@@ -387,7 +338,6 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      session: ensureOverlaySession(),
       preload: preloadFile(),
     },
   })
@@ -395,7 +345,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   win.setMenuBarVisibility(false)
   win.setTitle('')
   win.setFocusable(false)
-  applyChrome(win, chrome, true)
+  applyChrome(win, { ...chrome, alwaysOnTop: undefined }, true)
 
   const row: OverlayRow = {
     contributor: spec.contributor,
@@ -425,7 +375,6 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   })
 
   try {
-    await ensureOverlayAuth()
     if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
     await loadOverlayUrl(win, spec.url)
   } catch (err) {
@@ -439,7 +388,8 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     throw err instanceof Error ? err : new Error('desktop overlay failed to load')
   }
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
-  win.showInactive()
+  if (chrome.alwaysOnTop === true) applyAlwaysOnTop(win, true)
+  win.show()
   console.log(`[DSH-Desktop] overlay ${spec.contributor}/${spec.id} ${placed.width}x${placed.height}`)
   return infoOf(row)
 }
@@ -497,14 +447,8 @@ function listFor(sender: WebContents): DesktopOverlayInfo[] {
 }
 
 /** 注册 overlay IPC。必须在 loadURL 之前调用。 */
-export function setupDesktopOverlays(
-  origin: () => string | null,
-  authUrl: () => string | null = () => null,
-): void {
+export function setupDesktopOverlays(origin: () => string | null): void {
   getOrigin = origin
-  getAuthUrl = authUrl
-  overlayAuthed = false
-  ensureOverlaySession()
 
   ipcMain.handle(Ipc.overlays.open, async (event, raw: unknown): Promise<DesktopOverlayInfo> => {
     if (isOverlaySender(event.sender) !== undefined) throw new Error('overlay cannot open another overlay')
