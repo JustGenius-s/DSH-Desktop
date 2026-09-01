@@ -229,9 +229,14 @@ function applyIgnore(win: BrowserWindow, mode: DesktopOverlayIgnoreMouse | undef
   else win.setIgnoreMouseEvents(false)
 }
 
-function applyAlwaysOnTop(_win: BrowserWindow, _enabled: boolean): void {
-  // 不调用 setAlwaysOnTop / setVisibleOnAllWorkspaces：
-  // 主窗口应靠系统前台调度；这两套 API 在签名 .app 里会偶发 SIGSEGV。
+function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
+  if (win.isDestroyed()) return
+  // B：普通浮动层。不要用 screen-saver、panel、showInactive、visibleOnFullScreen。
+  if (enabled && process.platform === 'darwin') {
+    win.setAlwaysOnTop(true, 'floating')
+    return
+  }
+  win.setAlwaysOnTop(enabled)
 }
 
 function applyChrome(win: BrowserWindow, chrome: DesktopOverlayChrome, initial: boolean): void {
@@ -289,7 +294,8 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   if (existing !== undefined) {
     existing.id = spec.id
     existing.ownerWcId = owner.id
-    applyChrome(existing.win, spec.chrome ?? {}, false)
+    const reuseChrome = spec.chrome ?? {}
+    applyChrome(existing.win, { ...reuseChrome, alwaysOnTop: undefined }, false)
     const current = existing.win.getBounds()
     const width = spec.bounds.width
     const height = spec.bounds.height
@@ -301,7 +307,10 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       if (existing.win.isDestroyed()) throw new Error('desktop overlay closed while loading')
       await loadOverlayUrl(existing.win, spec.url)
     }
-    if (!existing.win.isDestroyed()) existing.win.show()
+    if (!existing.win.isDestroyed()) {
+      existing.win.show()
+      if (reuseChrome.alwaysOnTop !== undefined) applyAlwaysOnTop(existing.win, reuseChrome.alwaysOnTop)
+    }
     return infoOf(existing)
   }
 
@@ -388,8 +397,8 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
     throw err instanceof Error ? err : new Error('desktop overlay failed to load')
   }
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
-  if (chrome.alwaysOnTop === true) applyAlwaysOnTop(win, true)
   win.show()
+  if (chrome.alwaysOnTop === true) applyAlwaysOnTop(win, true)
   console.log(`[DSH-Desktop] overlay ${spec.contributor}/${spec.id} ${placed.width}x${placed.height}`)
   return infoOf(row)
 }
