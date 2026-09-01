@@ -18,9 +18,6 @@ import type {
   DesktopBootFailure,
   DesktopSeatAction,
   DesktopSeatName,
-  DesktopUpdateKind,
-  DesktopUpdateState,
-  DshChannel,
   DshDesktop,
 } from './api'
 import type { Ipc as IpcShape } from './ipc'
@@ -33,14 +30,9 @@ import type { Ipc as IpcShape } from './ipc'
 // tsc 都会在这里报错，无需人工同步。
 const Ipc = {
   updates: {
-    getState: 'desktop:updates:get-state',
-    state: 'desktop:updates:state',
-    checkNow: 'desktop:updates:check-now',
+    appVersion: 'desktop:updates:app-version',
     downloadApp: 'desktop:updates:download-app',
     updateDsh: 'desktop:updates:update-dsh',
-    setDshChannel: 'desktop:updates:set-dsh-channel',
-    skipVersion: 'desktop:updates:skip-version',
-    setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
@@ -73,22 +65,12 @@ const Ipc = {
 } satisfies typeof IpcShape
 
 const api: DshDesktop = {
+  // 只执行，不检测：状态与配置归插件 host 半侧（见 api.ts 顶部说明）。
   updates: {
-    getState: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.getState),
-    onState: (listener: (state: DesktopUpdateState) => void): (() => void) => {
-      const wrapped = (_event: unknown, state: DesktopUpdateState) => listener(state)
-      ipcRenderer.on(Ipc.updates.state, wrapped)
-      return () => ipcRenderer.removeListener(Ipc.updates.state, wrapped)
-    },
-    checkNow: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.checkNow),
-    downloadApp: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp),
-    updateDsh: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.updateDsh),
-    setDshChannel: (channel: DshChannel, version?: string): Promise<DesktopUpdateState> =>
-      ipcRenderer.invoke(Ipc.updates.setDshChannel, channel, version),
-    skipVersion: (kind: DesktopUpdateKind): Promise<void> =>
-      ipcRenderer.invoke(Ipc.updates.skipVersion, kind),
-    setGate: (kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState> =>
-      ipcRenderer.invoke(Ipc.updates.setGate, kind, enabled),
+    appVersion: (): Promise<string> => ipcRenderer.invoke(Ipc.updates.appVersion),
+    downloadApp: (url?: string): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp, url),
+    updateDsh: (version: string): Promise<void> =>
+      ipcRenderer.invoke(Ipc.updates.updateDsh, version),
     relaunch: (): void => ipcRenderer.send(Ipc.updates.relaunch),
   },
   seats: {

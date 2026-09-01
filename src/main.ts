@@ -13,9 +13,10 @@
 import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, session } from 'electron'
+
 import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, waitForReady, type DshHost } from './dsh-host'
 import { ensureDshInstalled } from './runtime-manager'
-import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
+import { setupDesktopBridge } from './desktop-bridge'
 import { setupDesktopNotify } from './desktop-notify'
 import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
@@ -334,13 +335,11 @@ app.whenReady().then(async () => {
   // 确保启动全程始终有可见窗口（见 createWindow 内注释）。
   mainWindow = createWindow(dshLaunchUrl, splash)
 
-  // 更新检查改为后台静默进行：桌面桥负责检测 + 轮询 + 通过 preload 暴露给
-  // 网页；dsh-desktop-update 插件（由安装脚本装进 web profile）在侧栏设置
-  // 按钮旁渲染更新徽章。安装脚本与首查都不阻塞窗口出现，失败只记日志。
-  void (async () => {
-    await installDesktopPlugin()
-    await checkDesktopUpdates()
-  })()
+  // 更新检测已移到 dsh-desktop-update 插件的 host 半侧（跑在 dsh web host
+  // 的 Node 进程里）：壳不再查网络、不再轮询、不再维护更新状态。这里只把插件
+  // 装齐，并把「执行」端点挂上；插件自己检测并把结果提供给网页。
+  // 安装不阻塞窗口出现，失败只记日志。
+  void installDesktopPlugin()
 })
 
 app.on('activate', () => {

@@ -36,7 +36,18 @@ import { fileURLToPath } from 'node:url'
 const PLUGIN_NAME = '@just-genius/dsh-desktop-update'
 const PLUGINS_DIR_NAME = 'plugins'
 const INSTALL_DIR_NAME = 'desktop-update'
-/** 宿主 App 要求的最小插件版本；已装版本 >= 它时跳过安装。 */
+/**
+ * 宿主 App 要求的最小插件版本；已装版本 >= 它时跳过安装。
+ *
+ * 0.2.0 把更新检测从壳搬到了插件 host 半侧，壳侧的 `updates` 桥也换成了
+ * 「只执行」的新形状。旧插件（<= 0.1.3）用的是旧桥：getState / checkNow /
+ * setDshChannel 等端点已删除，装上去拿不到任何更新状态。
+ *
+ * TODO: 等 @just-genius/dsh-desktop-update@0.2.0 发布到 npm 后，把这里提到
+ * '0.2.0'。在此之前保持 0.1.2：低于 0.2.0 的插件仍能装上（新壳保留了它用不到
+ * 的 seats / notify 两族），只是检测与执行能力缺失——远比注销掉、让用户连
+ * 更新徽章都看不到要好。
+ */
 const REQUIRED_VERSION = '0.1.2'
 /** 单个网络/安装动作的超时。 */
 const ACTION_TIMEOUT_MS = 120_000

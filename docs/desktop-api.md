@@ -1,6 +1,6 @@
 # `window.dshDesktop` 插件契约
 
-这是桌面壳注入到 DSH 网页的标准 API。插件只应依赖这里的形状；菜单、托盘、通知、更新检测、overlay 窗口的原生实现都在 Electron 主进程，与打包脚本分开。
+这是桌面壳注入到 DSH 网页的标准 API。插件只应依赖这里的形状；菜单、托盘、通知、overlay 窗口与更新**执行**的原生实现都在 Electron 主进程，与打包脚本分开。**更新检测不在壳里**——见下文 `updates`。
 
 源码真相：`src/api.ts`（类型）+ `src/preload.ts`（注入）+ `src/ipc.ts`（频道名，插件看不见）。
 
@@ -11,11 +11,11 @@ const desktop = window.dshDesktop
 if (desktop === undefined) return // 非桌面壳，空操作
 ```
 
-四族并列，不要把动作摊到根上，也不要把通知或 overlay 做成席位。
+四族并列，不要把动作摊到根上，也不要把通知或 overlay 做成席位。其中 `updates` 只做执行——检测在插件里。
 
 | 族 | 语义 | 寿命 |
 |---|---|---|
-| `updates` | 桌面更新领域动作 | 一次请求 |
+| `updates` | 更新执行（检测已迁到插件 host 半侧） | 一次请求 |
 | `seats` | 持久原生 UI 贡献（菜单 / 托盘） | 跟插件 fiber 同寿 |
 | `notify` | 系统通知 | 弹出 / 替换 / 关掉 |
 | `overlays` | 同源原生小窗（透明置顶等） | 跟贡献窗口同寿 |
@@ -24,18 +24,35 @@ if (desktop === undefined) return // 非桌面壳，空操作
 
 ## `updates`
 
+**壳只执行，不检测。** 检测（查 GitHub Releases / npm registry、比较版本、定期间隔、
+「跳过该版本」记录）全部在 [dsh-desktop-update](https://github.com/JustGenius-s/DSH-Plugs)
+插件的 **host 半侧**：它跑在 dsh web host 的 Node 进程里，没有 CORS 限制，也不依赖
+某个窗口开着。插件通过自己的同源路由（`/dsh-desktop-update/state` 等）把结果提供给
+网页。
+
+壳这族只剩四件事——每件都是只有打包好的桌面应用做得到的：
+
 ```ts
-const state = await desktop.updates.getState()
-const stop = desktop.updates.onState((next) => { /* ... */ })
-await desktop.updates.checkNow()
-await desktop.updates.downloadApp()
-await desktop.updates.updateDsh()
-await desktop.updates.skipVersion('app') // 或 'dsh'
-await desktop.updates.setGate('dsh', false)
-desktop.updates.relaunch()
+const version = await desktop.updates.appVersion()   // 壳的打包版本，如 '0.2.0'
+await desktop.updates.downloadApp(url)               // 用系统浏览器打开发布页
+await desktop.updates.updateDsh('0.1.2-alpha.3')     // pnpm 装指定版本；装完需 relaunch
+desktop.updates.relaunch()                           // 重启应用
 ```
 
-`state.app` / `state.dsh` 为 `null` 表示该侧无待处理更新。自动检查开关写在 `~/.dsh/settings.yaml` 的 `desktop-update` 分节。
+要点：
+
+- 没有 `getState` / `onState` / `checkNow` / `setGate` / `setDshChannel` /
+  `skipVersion` 了。状态与配置归插件：自动检查开关与 DSH 更新渠道写在
+  `~/.dsh/settings.yaml` 的 `desktop-update` 分节，由插件 host 半侧注册并 watch。
+- `updateDsh` **必须带目标版本**。壳不知道 latest 是什么，也不判断该不该更新。
+- 执行进度不由壳广播。插件的 browser 半侧驱动执行后，把成败回报给它自己的
+  host 半侧（`POST /dsh-desktop-update/exec`），因此进度跨窗口一致，刷新页面也不丢。
+- `downloadApp(url)` 只接受 `https://github.com/` 开头的地址，否则回落到仓库
+  Releases 页——避免网页借壳打开任意 URL。
+
+浏览器半侧是唯一同时触达两侧（壳的 preload 与 host 的路由）的地方，所以由它
+摆渡两件谁都做不了的事：把壳的版本号交给 host（检测 App 更新要用），把执行
+结果交给 host（进度要共享）。
 
 ## `seats`
 
