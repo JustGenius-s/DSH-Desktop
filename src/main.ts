@@ -12,7 +12,7 @@
 
 import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, screen, session } from 'electron'
+import { app, BrowserWindow, dialog, screen, session, type Session } from 'electron'
 
 import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, waitForReady, type DshHost } from './dsh-host'
 import { ensureDshInstalled } from './runtime-manager'
@@ -257,7 +257,30 @@ async function hardenChromiumStorage(): Promise<void> {
     } catch {
       // A leftover SW LevelDB from a previous crash is noisy but not fatal.
     }
+    try {
+      // dsh web 每个随机端口都会种一颗 `dsh-auth-*` cookie，且 cookie 不区分端口。
+      // 打包版用同一 userData 连开几十次后，`<script src="/plugins/??…">` 的 Cookie
+      // 头加上 2KB+ combo URL 会超过 Node 默认 16KiB，host 回 431，页面报
+      // Failed to load plugins。必须在 loadURL 之前清掉上一轮的死 cookie。
+      await withTimeout(clearLoopbackAuthCookies(ses), 2_000)
+    } catch {
+      // Cookie 库被锁时同样不阻断启动；子进程还有 header-size 兜底。
+    }
   }
+}
+
+/** 删掉上一轮 localhost 会话留下的 `dsh-auth-*`，避免 Cookie 头把 combo 请求顶到 431。 */
+async function clearLoopbackAuthCookies(ses: Session): Promise<void> {
+  const cookies = await ses.cookies.get({ domain: '127.0.0.1' })
+  const stale = cookies.filter((cookie) => cookie.name.startsWith('dsh-auth-'))
+  if (stale.length === 0) return
+  await Promise.all(
+    stale.map((cookie) => {
+      const protocol = cookie.secure ? 'https' : 'http'
+      return ses.cookies.remove(`${protocol}://127.0.0.1${cookie.path || '/'}`, cookie.name)
+    }),
+  )
+  console.log(`[DSH-Desktop] cleared ${String(stale.length)} leftover 127.0.0.1 auth cookies`)
 }
 
 function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
