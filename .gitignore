@@ -4,3 +4,4 @@ release/
 runtime/
 *.log
 .pnpm-store/
+.local-archive/

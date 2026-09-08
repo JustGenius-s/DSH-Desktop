@@ -43,12 +43,11 @@ const INSTALL_DIR_NAME = 'desktop-update'
  * 「只执行」的新形状。旧插件（<= 0.1.3）用的是旧桥：getState / checkNow /
  * setDshChannel 等端点已删除，装上去拿不到任何更新状态。
  *
- * TODO: 等 @just-genius/dsh-desktop-update@0.2.0 发布到 npm 后，把这里提到
- * '0.2.0'。在此之前保持 0.1.2：低于 0.2.0 的插件仍能装上（新壳保留了它用不到
- * 的 seats / notify 两族），只是检测与执行能力缺失——远比注销掉、让用户连
- * 更新徽章都看不到要好。
+ * 必须拒绝旧版：其客户端在 apply 时直接调用已移除的 updates.onState，
+ * 会导致插件加载失败。registry 尚无兼容版本时，沿用下方的跳过/注销逻辑，
+ * 下次启动再重试安装。
  */
-const REQUIRED_VERSION = '0.1.2'
+const REQUIRED_VERSION = '0.2.0'
 /** 单个网络/安装动作的超时。 */
 const ACTION_TIMEOUT_MS = 120_000
 /** 读取版本所用的 dist-tag（0.1.1 起正式版在 latest；beta 期曾用 'beta'）。 */
@@ -80,10 +79,13 @@ const profilePkgPath = join(dshHome, 'profiles', 'web', 'package.json')
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const runtimeRoot = join(scriptDir, '..', 'runtime')
 const nodeBin = join(runtimeRoot, 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
-const pnpmCjs = join(runtimeRoot, 'pnpm', 'bin', 'pnpm.cjs')
+// pnpm 12 只提供 .mjs；同时兼容仍使用 .cjs 的旧版内置运行时。
+const pnpmEntry = ['pnpm.cjs', 'pnpm.mjs']
+  .map((name) => join(runtimeRoot, 'pnpm', 'bin', name))
+  .find((entry) => existsSync(entry))
 const bundledBinDir = join(runtimeRoot, 'bin')
 
-if (!existsSync(nodeBin) || !existsSync(pnpmCjs)) {
+if (!existsSync(nodeBin) || pnpmEntry === undefined) {
   fail('内置运行时缺失（' + runtimeRoot + '）；开发模式请先 npm run collect')
 }
 
@@ -116,7 +118,7 @@ function run(cmd, cmdArgs, timeoutMs) {
 }
 
 function pnpm(pnpmArgs, timeoutMs) {
-  return run(nodeBin, [pnpmCjs, ...pnpmArgs], timeoutMs)
+  return run(nodeBin, [pnpmEntry, ...pnpmArgs], timeoutMs)
 }
 /** 解析 semver：返回 [major, minor, patch, prerelease 数组]（无 prerelease 为空数组）。 */
 function parseVersion(v) {

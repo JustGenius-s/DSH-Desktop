@@ -4,7 +4,7 @@
  * pnpm，不再重打包、重签名桌面版。
  */
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -76,14 +76,62 @@ function bundledNodeGypBinDir(): string {
   return join(bundledRuntimeRoot(), 'pnpm', 'dist', 'node-gyp-bin')
 }
 
-/** 把内置 `bin/` 与 pnpm 自带的 `node-gyp` 目录前置进 PATH。 */
+/**
+ * 定位 Git for Windows 的 `cmd` 目录（`git.exe` 所在处）。子进程母体的 PATH
+ * 可能被裁剪到只剩内置 `bin/`（不含 git），导致 dsh host 里 git 面板
+ * `spawn('git')` 报 ENOENT。这里从常见安装位置 + 注册表系统 PATH 兜底探测。
+ * 找不到返回 undefined（此时保持旧行为）。
+ */
+function findGitBinDir(): string | undefined {
+  const candidates = new Set<string>()
+  const add = (dir: string | undefined) => {
+    if (dir) candidates.add(dir)
+  }
+
+  // 常见 Git for Windows / scoop 安装位置。
+  add(join(process.env.ProgramFiles ?? '', 'Git', 'cmd'))
+  add(join(process.env['ProgramFiles(x86)'] ?? '', 'Git', 'cmd'))
+  add(join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Git', 'cmd'))
+  add(join(process.env.USERPROFILE ?? '', 'scoop', 'apps', 'git', 'current', 'cmd'))
+
+  // 从注册表系统 PATH（machine + user）里抽取含 git 的目录。
+  const expand = (value: string) =>
+    value.replace(/%([^%]+)%/g, (whole, name: string) => process.env[name] ?? whole)
+  if (process.platform === 'win32') {
+    const reg = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe')
+    const keys = [
+      'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment',
+      'HKCU\\Environment',
+    ]
+    for (const key of keys) {
+      try {
+        const res = spawnSync(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', windowsHide: true })
+        if (res.status !== 0 || !res.stdout) continue
+        const m = /REG_(?:EXPAND_)?SZ\s+(.+)/i.exec(res.stdout)
+        for (const raw of (m?.[1] ?? '').split(';')) {
+          const dir = expand(raw.trim())
+          if (/git/i.test(dir)) add(dir)
+        }
+      } catch {
+        // 读取失败不影响：下面用常见路径兜底。
+      }
+    }
+  }
+
+  for (const dir of candidates) {
+    if (existsSync(join(dir, 'git.exe'))) return dir
+  }
+  return undefined
+}
+
+/** 把内置 `bin/` 与 pnpm 的 `node-gyp` 目录前置进 PATH，并确保 git 可用。 */
 export function withBundledBinPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const sep = process.platform === 'win32' ? ';' : ':'
-  const prepend = [bundledBinDir(), bundledNodeGypBinDir()]
-    // 目录可能不存在（旧包 / 精简包）；前置一个不存在的目录只会拖慢查找。
-    .filter((dir) => existsSync(dir))
-    .join(sep)
-  return { ...env, PATH: prepend === '' ? (env.PATH ?? '') : `${prepend}${sep}${env.PATH ?? ''}` }
+  const bundledDirs = [bundledBinDir(), bundledNodeGypBinDir()].filter((dir) => existsSync(dir))
+  const parts = [...bundledDirs, findGitBinDir(), env.PATH].filter(
+    (p): p is string => typeof p === 'string' && p.trim() !== '',
+  )
+  return { ...env, PATH: [...new Set(parts)].join(sep) }
 }
 
 /** 已安装的 dsh bin.js；未安装返回 undefined。 */
