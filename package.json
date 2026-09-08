@@ -33,7 +33,8 @@
       "package.json",
       "build/icon-app.png",
       "build/icon.png",
-      "build/splash.html"
+      "build/splash.html",
+      "build/plugin-recovery.html"
     ],
     "extraResources": [
       {
@@ -75,6 +76,10 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "electronLanguages": [
+        "en-US",
+        "zh-CN"
+      ],
       "target": [
         "nsis",
         "zip"
