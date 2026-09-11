@@ -32,6 +32,7 @@ import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
 import { focusMainWindow, focusWindow, setWindowRole } from './windows'
+import { titleBarChromeCSS } from './titlebar-chrome'
 
 /**
  * 开发版可以和已安装版同时运行，但两者不能共享 Chromium 数据目录：
@@ -61,6 +62,14 @@ let dshProcess: ChildProcess | null = null
 let dshBin: string | undefined
 let dshPort: number | null = null
 let mainWindow: BrowserWindow | null = null
+/**
+ * 当前注入的标题栏 chrome 样式 key。
+ *
+ * `did-finish-load` 每次导航都会重跑，而旧 `<style>` 不随导航丢弃：
+ * 不先移除就会在热重启/刷新后把同一套规则叠上一层又一层（每层都带
+ * `!important`，面板的内缩 padding 会越叠越宽）。
+ */
+const titleBarChromeKeys: string[] = []
 let dshOrigin: string | null = null
 /** 打开窗口用的 URL：新运行时带启动 token，旧运行时等于 origin。 */
 let dshLaunchUrl: string | null = null
@@ -167,73 +176,32 @@ function enforceRegularDockPolicy(): void {
 }
 
 /**
- * 隐藏原生标题栏后恢复窗口拖动热区。分三块，全部用 `-webkit-app-region`：
+ * 把标题栏 chrome（窗口拖动热区 + 浮层穿透切断）注入 DSH 网页。
  *
- * 1. 侧栏顶部 logo 行（logoRow）：原有拖拽区，保留；其中按钮/链接标 `no-drag`。
- * 2. 中间列会话顶栏（ConversationRoot 的 `<header>`）：整行可拖，面包屑、
- *    标签页、右侧动作按钮全部标 `no-drag`，不影响菜单/按钮功能。
- * 3. 中间列顶部通条：会话顶栏在 hero/空会话态会隐藏（headerHidden），此时用
- *    中间列容器（centerCol）的 `::before` 伪元素补一条 40px 高的顶部拖拽带；
- *    顶栏显示时该伪元素压在其下方，不可点击但可拖动，不遮挡任何交互控件。
- *
- * DSH 是运行时升级的 web 包，类名是构建时 hash 的（形如 `wSkVaW_header`），
- * 故一律用 `[class*='xxx']` 属性选择器匹配稳定的 camelCase 后缀，并用
- * `!important` 防止运行时注入的样式覆盖。
+ * 规则本体在 `titlebar-chrome.ts` 的纯函数里，便于单测；这里只做注入。
+ * 注入必须幂等：`did-finish-load` 会在每次 reload / 热重启后重跑，而旧的
+ * `<style>` 不会随导航清掉，重复 insertCSS 会让规则无限堆积。
  */
 async function applyTitleBarChrome(win: BrowserWindow): Promise<void> {
   const wc = win.webContents
   if (wc.isDestroyed()) return
 
-  const isMac = process.platform === 'darwin'
-  // Windows 有原生标题栏，侧栏不必为红绿灯再留上边距。
-  const macSidebarInset = isMac
-    ? `
-    [class*='logoRow'] { -webkit-app-region: drag; margin-top: 20px !important; }
-    :has(> [class*='logoRow']) { position: relative; }
-    :has(> [class*='logoRow'])::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 40px;
-      -webkit-app-region: drag;
-    }`
-    : `
-    [class*='logoRow'] { -webkit-app-region: drag; }`
-
-  await wc.insertCSS(`
-    /* ---- 1. 侧栏 logo 行：macOS 为红绿灯留白；Windows 贴顶 ---- */
-    ${macSidebarInset}
-    [class*='logoRow'] button,
-    [class*='logoRow'] a,
-    [class*='logoRow'] [role='button'] { -webkit-app-region: no-drag; }
-
-    /* ---- 2. 中间列会话顶栏：整行可拖，交互控件除外 ----
-       整个应用只有会话顶栏渲染 <header> 元素（详情面板等均为 div），
-       故直接用元素选择器；headerHidden 时 display:none，规则自然失效。 */
-    header[class*='header']:not([class*='headerHidden']) {
-      -webkit-app-region: drag;
+  for (const key of titleBarChromeKeys) {
+    if (wc.isDestroyed()) return
+    try {
+      await wc.removeInsertedCSS(key)
+    } catch {
+      // 上一轮注入的 key 在导航后已失效；没有可移除的样式，继续。
     }
-    header[class*='header'] button,
-    header[class*='header'] a,
-    header[class*='header'] [role='button'],
-    header[class*='header'] [role='tab'],
-    header[class*='header'] input,
-    header[class*='header'] select {
-      -webkit-app-region: no-drag;
-    }
+  }
+  titleBarChromeKeys.length = 0
 
-    /* ---- 3. 中间列顶部通条：顶栏隐藏时（hero/空会话态）仍可拖动 ----
-       伪元素压在顶栏/内容下层（z-index:0），不可点击但可拖动，不遮挡交互控件。 */
-    [class*='centerCol'] { position: relative; }
-    [class*='centerCol']::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 40px;
-      z-index: 0;
-      -webkit-app-region: drag;
-    }
-  `).catch(() => {})
+  if (wc.isDestroyed()) return
+  try {
+    titleBarChromeKeys.push(await wc.insertCSS(titleBarChromeCSS(process.platform)))
+  } catch {
+    // 注入失败不阻断启动：窗口只是拖不动，页面功能不受影响。
+  }
 }
 
 /** 启动/安装期间的 splash 窗口：本地静态页，进度条由 CSS 动画驱动，文字靠主进程更新。 */
