@@ -203,6 +203,8 @@ export interface DshDesktopOverlays {
   /** 绝对坐标或 delta；越界会被 clamp，`hitEdge` 表示撞到屏边。 */
   move(id: string, spec: DesktopOverlayMoveSpec): Promise<DesktopOverlayMoveResult>
   setIgnoreMouseEvents(id: string, ignore: boolean, opts?: { forward?: boolean }): Promise<void>
+  /** Restore, show, and focus the DSH window that owns this overlay. */
+  activateOwner(id: string): Promise<void>
   focus(id: string): Promise<void>
   close(id: string): Promise<void>
   list(): Promise<DesktopOverlayInfo[]>

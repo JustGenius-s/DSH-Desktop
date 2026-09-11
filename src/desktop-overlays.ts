@@ -34,6 +34,25 @@ interface OverlayRow {
 const overlays: OverlayRow[] = []
 const watchedOwners = new Set<number>()
 let getOrigin: () => string | null = () => null
+/** 主窗口还没前置完成时，立刻 *显示* overlay 会抢前台。窗体本身必须更早建好。 */
+let overlaysReleased = false
+const overlayWaiters: Array<() => void> = []
+/**
+ * macOS 26 + Electron 43：页面起来之后再 `new BrowserWindow` 会在主线程
+ * SetRootCerts SIGSEGV。启动时（和 splash 同期）预建一扇隐藏窗，之后只复用。
+ */
+let idleOverlay: BrowserWindow | null = null
+
+/** 主窗口完成前置后再放行桌宠等 overlay。 */
+export function allowOverlays(): void {
+  overlaysReleased = true
+  while (overlayWaiters.length > 0) overlayWaiters.pop()?.()
+}
+
+function whenOverlaysAllowed(): Promise<void> {
+  if (overlaysReleased) return Promise.resolve()
+  return new Promise((resolve) => overlayWaiters.push(resolve))
+}
 
 function preloadFile(): string {
   return join(__dirname, 'preload.js')
@@ -73,12 +92,22 @@ function sendClosed(row: OverlayRow): void {
   if (owner !== undefined && !owner.isDestroyed()) owner.send(Ipc.overlays.closed, event)
 }
 
+function recycleOverlayWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.hide()
+  applyAlwaysOnTop(win, false)
+  applyIgnore(win, 'none')
+  void win.loadURL('about:blank').catch(() => {})
+  if (idleOverlay === null || idleOverlay.isDestroyed()) idleOverlay = win
+  else win.close()
+}
+
 function dispose(row: OverlayRow, notify: boolean): void {
   const idx = overlays.indexOf(row)
   if (idx >= 0) overlays.splice(idx, 1)
   if (!row.win.isDestroyed()) {
     row.win.removeAllListeners('closed')
-    row.win.close()
+    recycleOverlayWindow(row.win)
   }
   if (notify) sendClosed(row)
 }
@@ -90,7 +119,69 @@ function closeOwned(ownerWcId: number, notify: boolean): void {
 }
 
 export function closeAllOverlays(): void {
-  for (const row of [...overlays]) dispose(row, false)
+  for (const row of [...overlays]) {
+    const idx = overlays.indexOf(row)
+    if (idx >= 0) overlays.splice(idx, 1)
+    if (!row.win.isDestroyed()) {
+      row.win.removeAllListeners('closed')
+      row.win.close()
+    }
+  }
+  if (idleOverlay !== null && !idleOverlay.isDestroyed()) idleOverlay.close()
+  idleOverlay = null
+}
+
+function createOverlayBrowserWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 330,
+    height: 230,
+    show: false,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: false,
+    focusable: false,
+    resizable: false,
+    hasShadow: false,
+    skipTaskbar: true,
+    fullscreenable: false,
+    maximizable: false,
+    minimizable: false,
+    hiddenInMissionControl: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: preloadFile(),
+    },
+  })
+  setWindowRole(win, 'overlay')
+  win.setMenuBarVisibility(false)
+  win.setTitle('')
+  win.setFocusable(false)
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedOverlayUrl(url)) event.preventDefault()
+  })
+  win.webContents.on('will-redirect', (event, url) => {
+    if (!isAllowedOverlayUrl(url)) event.preventDefault()
+  })
+  return win
+}
+
+/** 与 splash 同期调用：此时建窗安全，页面加载后再建会 SIGSEGV。 */
+export function prewarmOverlayWindow(): void {
+  if (idleOverlay !== null && !idleOverlay.isDestroyed()) return
+  idleOverlay = createOverlayBrowserWindow()
+  void idleOverlay.loadURL('about:blank').catch(() => {})
+}
+
+function adoptIdleOverlayWindow(): BrowserWindow {
+  const win = idleOverlay !== null && !idleOverlay.isDestroyed() ? idleOverlay : null
+  idleOverlay = null
+  if (win !== null) return win
+  console.warn('[DSH-Desktop] overlay prewarm missed; creating a window now (may SIGSEGV on macOS 26)')
+  return createOverlayBrowserWindow()
 }
 
 function roundInt(n: unknown): number | null {
@@ -231,11 +322,7 @@ function applyIgnore(win: BrowserWindow, mode: DesktopOverlayIgnoreMouse | undef
 
 function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
   if (win.isDestroyed()) return
-  // B：普通浮动层。不要用 screen-saver、panel、showInactive、visibleOnFullScreen。
-  if (enabled && process.platform === 'darwin') {
-    win.setAlwaysOnTop(true, 'floating')
-    return
-  }
+  // 不要用 screen-saver / floating / panel：打包版和 macOS 26 上会 SIGSEGV。
   win.setAlwaysOnTop(enabled)
 }
 
@@ -250,6 +337,7 @@ function applyChrome(win: BrowserWindow, chrome: DesktopOverlayChrome, initial: 
 }
 
 function isAllowedOverlayUrl(url: string): boolean {
+  if (url === 'about:blank') return true
   try {
     const origin = getOrigin()
     return origin !== null && new URL(url).origin === new URL(origin).origin
@@ -290,6 +378,8 @@ async function loadOverlayUrl(win: BrowserWindow, url: string): Promise<void> {
 }
 
 async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Promise<DesktopOverlayInfo> {
+  await whenOverlaysAllowed()
+  if (owner.isDestroyed()) throw new Error('desktop overlay owner gone')
   const existing = overlays.find((row) => row.contributor === spec.contributor && !row.win.isDestroyed())
   if (existing !== undefined) {
     existing.id = spec.id
@@ -322,38 +412,10 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       ? { x: spec.bounds.x, y: spec.bounds.y }
       : defaultPosition(width, height)
   const placed = clampRect(pos.x, pos.y, width, height)
-  const frame = chrome.frame === true
-  const transparent = chrome.transparent === true
 
-  const win = new BrowserWindow({
-    x: placed.x,
-    y: placed.y,
-    width: placed.width,
-    height: placed.height,
-    transparent,
-    frame,
-    alwaysOnTop: false,
-    focusable: false,
-    show: false,
-    resizable: chrome.resizable === true,
-    hasShadow: chrome.hasShadow === true,
-    skipTaskbar: chrome.skipTaskbar !== false && !frame ? true : chrome.skipTaskbar === true,
-    fullscreenable: false,
-    maximizable: false,
-    minimizable: frame,
-    hiddenInMissionControl: chrome.skipTaskbar === true || (!frame && chrome.skipTaskbar !== false),
-    backgroundColor: transparent ? '#00000000' : '#151517',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      preload: preloadFile(),
-    },
-  })
-  setWindowRole(win, 'overlay')
-  win.setMenuBarVisibility(false)
-  win.setTitle('')
-  win.setFocusable(false)
+  const win = adoptIdleOverlayWindow()
+  if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
+  win.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
   applyChrome(win, { ...chrome, alwaysOnTop: undefined }, true)
 
   const row: OverlayRow = {
@@ -371,16 +433,10 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       overlays.splice(idx, 1)
       sendClosed(row)
     }
-  })
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  win.webContents.on('will-navigate', (event, url) => {
-    if (!isAllowedOverlayUrl(url)) event.preventDefault()
-  })
-  win.webContents.on('will-redirect', (event, url) => {
-    if (!isAllowedOverlayUrl(url)) event.preventDefault()
+    idleOverlay = null
   })
   win.webContents.on('render-process-gone', () => {
-    if (!win.isDestroyed()) win.close()
+    dispose(row, true)
   })
 
   try {
@@ -458,6 +514,8 @@ function listFor(sender: WebContents): DesktopOverlayInfo[] {
 /** 注册 overlay IPC。必须在 loadURL 之前调用。 */
 export function setupDesktopOverlays(origin: () => string | null): void {
   getOrigin = origin
+  overlaysReleased = false
+  overlayWaiters.length = 0
 
   ipcMain.handle(Ipc.overlays.open, async (event, raw: unknown): Promise<DesktopOverlayInfo> => {
     if (isOverlaySender(event.sender) !== undefined) throw new Error('overlay cannot open another overlay')
@@ -495,6 +553,18 @@ export function setupDesktopOverlays(origin: () => string | null): void {
       row.win.setIgnoreMouseEvents(ignore, forward ? { forward: true } : undefined)
     },
   )
+
+  ipcMain.handle(Ipc.overlays.activateOwner, (event, id: unknown): void => {
+    if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id)) throw new Error('invalid desktop overlay')
+    const row = resolveOverlay(event.sender, id)
+    if (row === undefined) throw new Error('desktop overlay not found')
+    const owner = webContentsById(row.ownerWcId)
+    const ownerWindow = owner === undefined ? null : BrowserWindow.fromWebContents(owner)
+    if (ownerWindow === null || ownerWindow.isDestroyed()) throw new Error('desktop overlay owner not found')
+    if (ownerWindow.isMinimized()) ownerWindow.restore()
+    ownerWindow.show()
+    ownerWindow.focus()
+  })
 
   ipcMain.handle(Ipc.overlays.focus, (event, id: unknown): void => {
     if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id)) throw new Error('invalid desktop overlay')

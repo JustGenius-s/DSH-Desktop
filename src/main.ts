@@ -10,6 +10,7 @@
  * 用户进度反馈，装完/就绪后再过渡到主窗口。
  */
 
+import './macos-node-ca'
 import { type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, screen, session, type Session } from 'electron'
@@ -18,7 +19,7 @@ import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, waitForReady, type 
 import { ensureDshInstalled } from './runtime-manager'
 import { setupDesktopBridge } from './desktop-bridge'
 import { setupDesktopNotify } from './desktop-notify'
-import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
+import { allowOverlays, closeAllOverlays, prewarmOverlayWindow, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
 import { openRecoveryWindow, recordBootFailure, setupPluginRecovery } from './plugin-recovery'
@@ -95,6 +96,9 @@ function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
     // 主窗口就会显示在别的窗口后面。
     focusWindow(win)
     if (!splash.isDestroyed()) splash.close()
+    // 主窗口站稳后再放行桌宠 overlay：启动瞬间建第二扇窗会撞
+    // Electron 43 + macOS 26 的 SetRootCerts SIGSEGV。
+    allowOverlays()
   })
   win.on('closed', () => {
     if (mainWindow !== win) return
@@ -248,7 +252,9 @@ function onceExit(child: ChildProcess, timeoutMs: number): Promise<void> {
 }
 
 async function hardenChromiumStorage(): Promise<void> {
-  const sessions = [session.defaultSession, session.fromPartition('persist:dsh-overlay')]
+  // overlay 已改用 defaultSession。启动时不要创建 persist:dsh-overlay：
+  // 首次会摸 Keychain / CA，打包版从 Finder 打开容易 SIGSEGV。
+  const sessions = [session.defaultSession]
   for (const ses of sessions) {
     try {
       // Chromium 的清理调用在数据库被另一实例占用时可能既不成功也不 reject；
@@ -315,6 +321,8 @@ app.whenReady().then(async () => {
   }
 
   const splash = createSplash()
+  // 必须和 splash 一起建：等主窗口 load 完再 new BrowserWindow 会 SetRootCerts。
+  prewarmOverlayWindow()
 
   let bin: string
   try {

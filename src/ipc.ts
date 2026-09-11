@@ -32,6 +32,7 @@ export const Ipc = {
     update: 'desktop:overlays:update',
     move: 'desktop:overlays:move',
     setIgnoreMouseEvents: 'desktop:overlays:set-ignore-mouse-events',
+    activateOwner: 'desktop:overlays:activate-owner',
     focus: 'desktop:overlays:focus',
     close: 'desktop:overlays:close',
     list: 'desktop:overlays:list',

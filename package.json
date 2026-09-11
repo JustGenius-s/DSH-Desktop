@@ -9,8 +9,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "collect": "node scripts/collect-runtime.mjs",
-    "start": "npm run build && electron .",
-    "dev": "npm run build && electron .",
+    "start": "npm run build && env NODE_OPTIONS=--no-use-system-ca electron .",
+    "dev": "npm run build && env NODE_OPTIONS=--no-use-system-ca electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist:mac": "npm run build && npm run collect && electron-builder --mac",
     "dist:win": "npm run build && npm run collect && electron-builder --win"
@@ -61,7 +61,10 @@
     "mac": {
       "icon": "build/icon.icns",
       "extendInfo": {
-        "NSUserNotificationAlertStyle": "alert"
+        "NSUserNotificationAlertStyle": "alert",
+        "LSEnvironment": {
+          "NODE_OPTIONS": "--no-use-system-ca"
+        }
       },
       "category": "public.app-category.developer-tools",
       "target": [
