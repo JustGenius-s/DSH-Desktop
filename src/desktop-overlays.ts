@@ -6,6 +6,7 @@
 
 import { join } from 'node:path'
 import { BrowserWindow, ipcMain, screen, session, type Session, type WebContents } from 'electron'
+import { enforceRegularDockPolicy } from './dock-policy'
 import {
   DESKTOP_ID_RE,
   type DesktopOverlayBounds,
@@ -274,10 +275,14 @@ function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
   if (enabled) {
     if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'screen-saver')
     else win.setAlwaysOnTop(true)
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    // 注意：不能调用 setVisibleOnAllWorkspaces(true)——macOS 上它会触发
+    // AppKit 把应用判为辅助应用，Dock 会删除应用的 tile（表现为
+    // 「Dock 图标闪一下就没」）。panel 类型窗口（NSPanel）天然跨
+    // 所有 Space，不需要 setVisibleOnAllWorkspaces。实测：
+    //   start                      : dock.isVisible() = true
+    //   + setVisibleOnAllWorkspaces: dock.isVisible() = false（不可恢复）
   } else {
     win.setAlwaysOnTop(false)
-    win.setVisibleOnAllWorkspaces(false)
   }
 }
 
@@ -350,6 +355,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       await loadOverlayUrl(existing.win, spec.url)
     }
     if (!existing.win.isDestroyed()) existing.win.showInactive()
+    enforceRegularDockPolicy()
     return infoOf(existing)
   }
 
@@ -396,6 +402,8 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   win.setTitle('')
   win.setFocusable(false)
   applyChrome(win, chrome, true)
+  // 防御性断言：panel 窗口本身不破坏 Dock tile（实测 dock.isVisible 保持
+  // true），但保留幂等守卫，万一系统其他原因压掉 tile 也能拉回。
 
   const row: OverlayRow = {
     contributor: spec.contributor,
@@ -440,6 +448,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   }
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
   win.showInactive()
+  enforceRegularDockPolicy()
   console.log(`[DSH-Desktop] overlay ${spec.contributor}/${spec.id} ${placed.width}x${placed.height}`)
   return infoOf(row)
 }
