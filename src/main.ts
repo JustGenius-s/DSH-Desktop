@@ -13,6 +13,7 @@
  */
 
 import { type ChildProcess } from 'node:child_process'
+import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, dialog, session, shell } from 'electron'
 import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, stopDsh, waitForPortFree, waitForReady, type DshHost } from './dsh-host'
@@ -27,12 +28,15 @@ import {
 import { ensureDshInstalled, installedDshBin } from './runtime-manager'
 import { openRecoveryWindow, recordBootFailure, setupPluginRecovery } from './plugin-recovery'
 import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
-import { setupDesktopNotify } from './desktop-notify'
+import { installWebNotificationBridge, setupDesktopNotify, showTestBanner } from './desktop-notify'
 import { closeAllOverlays, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
 import { installDesktopPlugin } from './plugin-installer'
+import { enforceRegularDockPolicy, startDockPolicyGuard, stopDockPolicyGuard } from './dock-policy'
 import { focusMainWindow, focusWindow, setWindowRole } from './windows'
 import { titleBarChromeCSS } from './titlebar-chrome'
+import { readWebPort, rememberWebPort } from './web-port'
+import { dshAuthCookieUrl, isDshAuthCookie } from './dsh-auth-cookies'
 
 /**
  * 开发版可以和已安装版同时运行，但两者不能共享 Chromium 数据目录：
@@ -50,7 +54,10 @@ const isPrimaryInstance = app.isPackaged ? app.requestSingleInstanceLock() : tru
 if (!isPrimaryInstance) {
   app.quit()
 } else if (app.isPackaged) {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    // 二次启动会在 Dock 里闪一下再因单实例锁退出；顺带把旧实例瓷砖拉回。
+    enforceRegularDockPolicy()
+    if (argv.includes('--dsh-test-notify')) showTestBanner()
     focusMainWindow()
   })
 }
@@ -103,7 +110,7 @@ function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
     minWidth: 800,
     minHeight: 600,
     title: 'DSH-Desktop',
-    icon: join(app.getAppPath(), 'build', 'icon.png'),
+    icon: join(app.getAppPath(), 'build', 'icon-app.png'),
     // 隐藏 macOS 原生标题栏、保留红绿灯按钮，让窗口顶部直接露出 DSH 深色底色。
     titleBarStyle: 'hiddenInset',
     backgroundColor: DSH_BG,
@@ -163,16 +170,11 @@ function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
     event.preventDefault()
     if (!openInDefaultBrowser(url)) console.warn(`[DSH-Desktop] 已拦截跨源导航：${url}`)
   })
+  // 必须在 loadURL 之前挂上：网页 Notification 接到原生桥，否则插件测试按钮
+  // 会走 Chromium 那条「已授权但系统没问过」的静默丢弃路径。
+  installWebNotificationBridge(win)
   void win.loadURL(url)
   return win
-}
-
-/** macOS 启动期 Dock 策略守卫：系统会在「应用首个窗口首次显示」这一时刻，
- *  按保存的 UIElement endowment 把应用降级为 accessory 策略（实测启动后约
- *  4s、主窗口 ready-to-show 时发生），Dock 图标随之消失。因此在各关键节点
- *  重复断言 regular，覆盖这次降级；断言幂等、开销可忽略。 */
-function enforceRegularDockPolicy(): void {
-  if (process.platform === 'darwin') app.setActivationPolicy('regular')
 }
 
 /**
@@ -220,7 +222,12 @@ function createSplash(): BrowserWindow {
     },
   })
   setWindowRole(win, 'splash')
-  win.once('ready-to-show', () => win.show())
+  // splash 是启动期第一个窗口；Dock 图标「闪一下就没」就发生在这里，
+  // 主窗口尚未出现。show 后立刻 dock.show()，避免只剩无 Dock 瓷砖的壳。
+  win.once('ready-to-show', () => {
+    win.show()
+    enforceRegularDockPolicy()
+  })
   void win.loadFile(join(app.getAppPath(), 'build', 'splash.html'))
   return win
 }
@@ -269,8 +276,25 @@ function attachExitHandler(host: DshHost): void {
   host.child.on('exit', (code, signal) => {
     // 主动退出、热重启换进程、或隔离重试的旧进程不弹错误框。
     if (stopping || restartingWeb || dshProcess !== host.child) return
+    const output = host.recentOutput()
+    try {
+      const logPath = join(app.getPath('logs'), 'dsh-service.log')
+      const record = [
+        `[${new Date().toISOString()}] unexpected exit code=${code ?? 'null'} signal=${signal ?? 'null'}`,
+        output,
+        '',
+      ].join('\n')
+      appendFileSync(logPath, record)
+    } catch {
+      // 诊断落盘失败不阻断错误提示。
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
-      reportError('DSH-Desktop', `DSH 服务意外退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）`)
+      const summary = summarizeDshFailure(output)
+      const detail = summary ? `\n${summary}` : ''
+      reportError(
+        'DSH-Desktop',
+        `DSH 服务意外退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）${detail}`,
+      )
     }
   })
 }
@@ -305,6 +329,11 @@ async function bootDsh(
     dshPort = port
     dshOrigin = `http://${DSH_HOST}:${port}`
     dshLaunchUrl = outcome.url
+    try {
+      rememberWebPort(app.getPath('userData'), port)
+    } catch (error) {
+      console.warn('[DSH-Desktop] failed to remember web port', error)
+    }
     return { launchUrl: outcome.url, port, lastOutput: '' }
   }
 
@@ -359,6 +388,11 @@ async function restartDshWebImpl(): Promise<void> {
       const launchUrl = dshLaunchUrl
       const win = mainWindow
       if (launchUrl !== null && win !== null && !win.isDestroyed()) {
+        try {
+          await clearStaleDshAuthCookies()
+        } catch (error) {
+          console.warn('[DSH-Desktop] failed to clear stale DSH auth cookies before web reload', error)
+        }
         await win.loadURL(launchUrl)
       }
     } finally {
@@ -379,6 +413,25 @@ registerDshWebHost({
   restart: restartDshWebImpl,
   isReady: () => dshBin !== undefined && dshOrigin !== null && !stopping,
 })
+
+/**
+ * The auth cookie name includes the host port, but browser cookies do not
+ * scope by port. After enough restarts, every old loopback-port cookie is sent
+ * with the current plugin combo request and can exceed Node's header limit.
+ * Remove only DSH's own loopback auth cookies; the next tokenized root load
+ * mints the one cookie for the current host.
+ */
+async function clearStaleDshAuthCookies(): Promise<void> {
+  const sessions = [session.defaultSession, session.fromPartition('persist:dsh-overlay')]
+  for (const ses of sessions) {
+    const cookies = await ses.cookies.get({})
+    await Promise.all(
+      cookies
+        .filter(isDshAuthCookie)
+        .map(cookie => ses.cookies.remove(dshAuthCookieUrl(cookie), cookie.name)),
+    )
+  }
+}
 
 async function hardenChromiumStorage(): Promise<void> {
   const sessions = [session.defaultSession, session.fromPartition('persist:dsh-overlay')]
@@ -411,21 +464,23 @@ function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
 
 app.whenReady().then(async () => {
   if (!isPrimaryInstance) return
-  // macOS 会根据启动上下文决定本应用的激活策略：一旦曾经以后台方式拉起过
-  // （open -g、Spotlight、登录项、app.relaunch 直拉等），FrontBoard 会保存
-  // UIElement endowment，后续每次启动都注入，导致应用以 accessory 策略运行、
-  // Dock 图标不出现（实测 `open -n` 全新实例也复现）。这里在 ready 后先断言
-  // 一次 regular；系统还会在主窗口首次显示时再降级一次，由
-  // enforceRegularDockPolicy 在 ready-to-show / did-finish-load 覆盖。
-  enforceRegularDockPolicy()
+  // Dock 图标「闪一下就没」发生在 splash 首窗显示前后：瓷砖被压掉时
+  // activationPolicy 往往仍是 regular，单靠 setActivationPolicy 拉不回来。
+  // 常驻守卫：任何时刻瓷砖被压掉都会拉回（V2 不再设 20 秒截止）。
+  startDockPolicyGuard()
   // pnpm start 跑的是 Electron 二进制，菜单栏最左默认写 "Electron"；
   // 先改名，后面 setApplicationMenu 才显示 DSH-Desktop。
   app.setName('DSH-Desktop')
   await hardenChromiumStorage()
+  try {
+    await clearStaleDshAuthCookies()
+  } catch (error) {
+    console.warn('[DSH-Desktop] failed to clear stale DSH auth cookies', error)
+  }
 
   let port: number
   try {
-    port = await findFreePort()
+    port = await findFreePort(readWebPort(app.getPath('userData')))
   } catch (err) {
     reportError('DSH-Desktop', `无法分配端口：${err instanceof Error ? err.message : String(err)}`)
     app.quit()
@@ -503,18 +558,19 @@ app.whenReady().then(async () => {
     await checkDesktopUpdates()
   })()
 
-  // 兜底：启动序列全部结束后再断言一次 regular，防御系统在更晚时刻
-  // 再次按保存的 endowment 降级（幂等，开销可忽略）。
+  // 启动守卫会覆盖这段窗口期；再留一次显式断言兜底。
   setTimeout(() => enforceRegularDockPolicy(), 10_000)
 })
 
 app.on('activate', () => {
   // Dock / 托盘激活时 AppKit 常把最上层 panel overlay 当成前台窗。
+  enforceRegularDockPolicy()
   focusMainWindow()
 })
 
 app.on('before-quit', () => {
   stopping = true
+  stopDockPolicyGuard()
   stopPluginConfigWatch()
   closeAllOverlays()
   const p = dshProcess
