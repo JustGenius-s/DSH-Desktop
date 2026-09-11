@@ -5,4 +5,13 @@ runtime/
 *.log
 .pnpm-store/
 .userdata-dev/
-.dsh-dev/.DS_Store
+.dsh-dev/
+
+# macOS / 本地调试产物
+.DS_Store
+.install-backups/
+scripts/probe-app/
+
+# 手工改过的临时副本
+*.bak-*
+*.v3-debug
