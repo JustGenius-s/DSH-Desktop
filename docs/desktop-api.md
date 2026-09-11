@@ -144,6 +144,8 @@ await desktop.notify.close('desktop-update') // 该 contributor 全部
 
 macOS 打包包在 `Info.plist` 里声明了 `NSUserNotificationAlertStyle=alert`。开发态 `pnpm start` 走 Electron 二进制，通知可能显示为 Electron，系统也可能先问权限。
 
+网页里的 `new Notification()`（例如 `dsh-notification` 插件）由主窗口 preload 接到本族原生通知。Chromium 自己的 Notification API 在桌面壳里会显示已授权、却不向系统申请 UNUserNotificationCenter，横幅被静默丢掉。
+
 ## `overlays`
 
 主进程开一扇同源小窗。插件只交 JSON：URL、尺寸、窗口铬（透明 / 置顶 / 点穿）。拿不到 `BrowserWindow`。

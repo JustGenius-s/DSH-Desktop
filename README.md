@@ -46,6 +46,8 @@ Electron main process
 
 DSH is installed from npm at runtime, not shipped with the app. Upgrading DSH = detect a newer version on launch → click "Update" → optionally restart the web service (the desktop app stays open). No rebuild or re-signing.
 
+After a successful boot, the web port is saved in `web-port.json` under Electron's user-data directory. Cold starts reuse it when available so origin-scoped browser preferences survive restarts. If another process occupies that port, a new loopback port is allocated; the app never attaches to that process. Plugins must still persist durable data on the host to survive a port change. Development and installed apps keep separate port records.
+
 ## Develop
 
 ```sh
@@ -55,6 +57,13 @@ pnpm start        # first launch installs @deepseek-ai/dsh (~1-2 min)
 ```
 
 Dev and packaged behave identically: both use the bundled node and the external `~/.dsh/runtime`.
+
+Port persistence tests (no Electron window or browser required):
+
+```sh
+npm run build
+node --test test/web-port.test.cjs
+```
 
 ## Package
 
