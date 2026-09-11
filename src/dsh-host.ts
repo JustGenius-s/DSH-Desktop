@@ -8,9 +8,10 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { get } from 'node:http'
 import { bundledNodeBin, withBundledBinPath } from './runtime-manager'
+import { DSH_HOST } from './web-port'
 
 /** host 只绑定回环地址：桌面端单机使用，绝不对外网暴露 RCE 面。 */
-export const DSH_HOST = '127.0.0.1'
+export { DSH_HOST, findFreePort } from './web-port'
 
 /** dsh 启动后轮询就绪的总超时。 */
 export const READY_TIMEOUT_MS = 30_000
@@ -30,20 +31,6 @@ export interface DshHost {
    * 尚未打印则为 undefined。
    */
   launchUrl: () => string | undefined
-}
-
-/** 分配一个空闲的回环 TCP 端口。 */
-export function findFreePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const srv = createServer()
-    srv.unref()
-    srv.on('error', reject)
-    srv.listen(0, DSH_HOST, () => {
-      const addr = srv.address()
-      const port = typeof addr === 'object' && addr !== null ? addr.port : 0
-      srv.close(() => resolvePort(port))
-    })
-  })
 }
 
 /**
