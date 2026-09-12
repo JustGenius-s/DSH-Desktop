@@ -8,6 +8,9 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "collect": "node scripts/collect-runtime.mjs",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
@@ -20,7 +23,8 @@
     "@types/node": "^22.0.0",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.7"
   },
   "build": {
     "appId": "com.justgenius.dshdesktop",
@@ -34,7 +38,8 @@
       "build/icon-app.png",
       "build/icon-mac.png",
       "build/icon.png",
-      "build/splash.html"
+      "build/splash.html",
+      "build/plugin-recovery.html"
     ],
     "extraResources": [
       {
@@ -83,6 +88,10 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "electronLanguages": [
+        "en-US",
+        "zh-CN"
+      ],
       "target": [
         "nsis",
         "zip"

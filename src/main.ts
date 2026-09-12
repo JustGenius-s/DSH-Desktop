@@ -15,7 +15,7 @@
 import { type ChildProcess } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, screen, session, shell, type Session } from 'electron'
 import { DSH_HOST, READY_TIMEOUT_MS, findFreePort, startDsh, stopDsh, waitForPortFree, waitForReady, type DshHost } from './dsh-host'
 import { registerDshWebHost, restartDshWeb } from './dsh-lifecycle'
 import {
@@ -103,10 +103,32 @@ function openInDefaultBrowser(rawUrl: string): boolean {
   return true
 }
 
+/**
+ * 按光标所在屏的工作区算首启位置和尺寸，保证窗口在屏幕正中。
+ * 至少约 1440×900（屏够大时），大约占工作区 82%，并限制上限，
+ * 避免 4K 上铺满整屏。
+ */
+function defaultMainBounds(): { x: number; y: number; width: number; height: number } {
+  const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+  const availableWidth = Math.max(area.width - 48, 800)
+  const availableHeight = Math.max(area.height - 48, 600)
+  const width = Math.round(Math.min(Math.max(area.width * 0.82, 1440), 1800, availableWidth))
+  const height = Math.round(Math.min(Math.max(area.height * 0.82, 900), 1120, availableHeight))
+  return {
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
+  }
+}
+
 function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
+  const { x, y, width, height } = defaultMainBounds()
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    x,
+    y,
+    width,
+    height,
     minWidth: 800,
     minHeight: 600,
     title: 'DSH-Desktop',
@@ -208,9 +230,14 @@ async function applyTitleBarChrome(win: BrowserWindow): Promise<void> {
 
 /** 启动/安装期间的 splash 窗口：本地静态页，进度条由 CSS 动画驱动，文字靠主进程更新。 */
 function createSplash(): BrowserWindow {
+  const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+  const width = 880
+  const height = 600
   const win = new BrowserWindow({
-    width: 880,
-    height: 600,
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
     frame: false,
     resizable: false,
     show: false,
@@ -443,7 +470,30 @@ async function hardenChromiumStorage(): Promise<void> {
     } catch {
       // A leftover SW LevelDB from a previous crash is noisy but not fatal.
     }
+    try {
+      // dsh web 每个随机端口都会种一颗 `dsh-auth-*` cookie，且 cookie 不区分端口。
+      // 打包版用同一 userData 连开几十次后，`<script src="/plugins/??…">` 的 Cookie
+      // 头加上 2KB+ combo URL 会超过 Node 默认 16KiB，host 回 431，页面报
+      // Failed to load plugins。必须在 loadURL 之前清掉上一轮的死 cookie。
+      await withTimeout(clearLoopbackAuthCookies(ses), 2_000)
+    } catch {
+      // Cookie 库被锁时同样不阻断启动；子进程还有 header-size 兜底。
+    }
   }
+}
+
+/** 删掉上一轮 localhost 会话留下的 `dsh-auth-*`，避免 Cookie 头把 combo 请求顶到 431。 */
+async function clearLoopbackAuthCookies(ses: Session): Promise<void> {
+  const cookies = await ses.cookies.get({ domain: '127.0.0.1' })
+  const stale = cookies.filter((cookie) => cookie.name.startsWith('dsh-auth-'))
+  if (stale.length === 0) return
+  await Promise.all(
+    stale.map((cookie) => {
+      const protocol = cookie.secure ? 'https' : 'http'
+      return ses.cookies.remove(`${protocol}://127.0.0.1${cookie.path || '/'}`, cookie.name)
+    }),
+  )
+  console.log(`[DSH-Desktop] cleared ${String(stale.length)} leftover 127.0.0.1 auth cookies`)
 }
 
 function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
@@ -534,7 +584,7 @@ app.whenReady().then(async () => {
   setupDesktopBridge()
   setupDesktopSeats()
   setupDesktopNotify()
-  setupDesktopOverlays(() => dshOrigin, () => dshLaunchUrl)
+  setupDesktopOverlays(() => dshOrigin)
   setupPluginRecovery()
   // splash 不在这里关闭，交给 createWindow 的 ready-to-show 在显示主窗口后关闭，
   // 确保启动全程始终有可见窗口（见 createWindow 内注释）。
@@ -563,7 +613,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('activate', () => {
-  // Dock / 托盘激活时 AppKit 常把最上层 panel overlay 当成前台窗。
+  // Dock / 托盘激活时最上层 overlay 常被 AppKit 当成前台窗。
   enforceRegularDockPolicy()
   focusMainWindow()
 })

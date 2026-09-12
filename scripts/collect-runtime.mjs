@@ -39,12 +39,13 @@ async function latestNodeVersion() {
 /**
  * 内置 pnpm 的版本范围。
  *
- * **不要改成 `latest`。** 应用主进程硬编码了 `pnpm/bin/pnpm.cjs`
- * （`src/runtime-manager.ts` 的 `bundledPnpmCjs()`），而该入口在 pnpm 12 里
- * 被删除了：12 只发布 `bin/pnpm.mjs`，它会在首次使用时**联网下载**原生
- * 二进制。对一个「首启要装 DSH 运行时」的路径来说，那个隐式网络依赖不能接受，
- * 且 `pnpm.cjs` 缺失会让 `ensureDshInstalled()` 直接 MODULE_NOT_FOUND。
- * 11.x 两个入口都有，是最后一个能静态内置的版本线。
+ * **不要改成 `latest`。** pnpm 12 起入口与原生二进制都换了形状：只剩
+ * `bin/pnpm.mjs`（`pnpm.cjs` 被删除），且首次使用要**联网下载**原生二进制。
+ * 对一个「首启要装 DSH 运行时」的路径来说，那个隐式网络依赖不能接受，因此
+ * 这里固定在 11.x——它是最后一条 tarball 自带 JS 实现、入口完整的版本线。
+ * （主进程侧已改为按实际存在的文件挑入口，见 runtime-manager.ts 的
+ * `bundledPnpmEntry()`；这里固定版本是为了别把网络依赖带进打包产物。）
+ * 下面的 `fetchPnpmNativeBinary()` 对 11.x 因此是空操作。
  */
 const PNPM_MAJOR = 11
 
@@ -98,46 +99,58 @@ async function fetchPnpm(version) {
 }
 
 /**
- * 断言内置 pnpm 真的能跑：应用主进程只会用「内置 node + bin/pnpm.cjs」这一条
- * 路径装 DSH，缺了入口的包在用户首启时才会炸。这里提前在打包阶段拦住。
+ * 把 pnpm 的原生二进制放进 `runtime/pnpm/node_modules/@pnpm/exe.<platform>-<arch>/`。
  *
- * 两个坑：
+ * pnpm >= 12 的 `bin/pnpm.mjs` 只是 Corepack 入口：它先找这个目录里的原生二进制，
+ * 找不到就**联网下载到包内同目录**。打包后的 App 在 /Applications 下受 SIP 与
+ * com.apple.provenance 保护，那里不可写，于是 pnpm 每次都 EPERM 失败——更新
+ * 功能在 pnpm 12 上等于作废。预先把二进制装好就不会走到下载分支。
  *
- * 1. **必须真的执行一次**，不能只查文件存在：pnpm 12 自带的 `pnpm.mjs` 需要
- *    联网下载原生二进制，文件在也不等于能用。
- * 2. **必须把 `--dir` 指向自己**（或任一没有 `packageManager` 字段的目录）。
- *    11.x 的 `bin/pnpm.cjs` 是个 Corepack 式转发器，会根据「目标目录向上
- *    找到的 `packageManager` 字段」切换成另一个 pnpm。本仓根目录写的是
- *    `pnpm@10.30.3`，所以不带 `--dir` 跑会打印 10.30.3 —— 那是它正确地转发
- *    到另一个版本，不是内置副本坏了。应用自己的调用带 `--dir ~/.dsh/runtime`
- *    （那边没有该字段），不受影响。
- *
- * @param version - 本次解出的 pnpm 版本，用于校验输出。
+ * pnpm < 12 的 tarball 自带 JS 实现，不需要原生二进制，跳过即可。
  */
-function assertPnpmRunnable(version) {
-  const pnpmDir = join(target, 'pnpm')
-  const entry = join(pnpmDir, 'bin', 'pnpm.cjs')
-  if (!existsSync(entry)) {
-    throw new Error(
-      `内置 pnpm ${version} 缺少 bin/pnpm.cjs（应用硬编码的入口）。` +
-        `pnpm 12 起不再发布该文件，请检查 collect-runtime.mjs 的 PNPM_MAJOR。`,
-    )
+async function fetchPnpmNativeBinary(version) {
+  const major = Number(version.split('.')[0])
+  if (!Number.isInteger(major) || major < 12) {
+    console.log(`[collect-runtime] pnpm ${version} bundles a JS CLI; no native binary needed`)
+    return
   }
-  const output = execFileSync(join(binDir, nodeName), [entry, '--dir', pnpmDir, '--version'], {
-    encoding: 'utf8',
-  }).trim()
-  if (output !== version) {
-    throw new Error(`内置 pnpm 自检失败：期望 ${version}，实际输出 ${output}`)
-  }
-  return output
+
+  const pkgName = `@pnpm/exe.${platform}-${arch}` // darwin-arm64 / win32-x64 / linux-x64
+  const tgz = join(target, 'pnpm-exe.tgz')
+  writeFileSync(
+    tgz,
+    await download(`https://registry.npmjs.org/@pnpm%2Fexe.${platform}-${arch}/-/exe.${platform}-${arch}-${version}.tgz`),
+  )
+
+  // 解到 node_modules/@pnpm/exe.<target>：pnpm 的 native-binary.mjs 正是
+  // 在「包裹自己所在目录的 node_modules」里按这个名字找二进制。
+  const destParent = join(target, 'pnpm', 'node_modules')
+  const dest = join(destParent, ...pkgName.split('/'))
+  rmSync(dest, { recursive: true, force: true })
+  mkdirSync(join(destParent, '@pnpm'), { recursive: true })
+  execFileSync('tar', ['-xzf', tgz, '-C', destParent, 'package'])
+  renameSync(join(destParent, 'package'), dest)
+  rmSync(tgz, { force: true })
+  console.log(`[collect-runtime] pnpm native binary: ${pkgName}`)
 }
 
-/** 写 pnpm shim：dsh 内部 spawnSync('pnpm') 靠 PATH 找到它，shim 用内置 node 跑 pnpm.cjs。 */
-function writePnpmShim() {
+/**
+ * pnpm 入口文件名：12.x 只有 `bin/pnpm.mjs`，11.x 两者都有，10.x 只有 `pnpm.cjs`。
+ * 挑实际存在的那个，别写死——写死 `.cjs` 在 pnpm 12 上就是 MODULE_NOT_FOUND。
+ */
+function resolvePnpmEntry() {
+  for (const name of ['pnpm.mjs', 'pnpm.cjs']) {
+    if (existsSync(join(target, 'pnpm', 'bin', name))) return name
+  }
+  throw new Error('pnpm tarball 里找不到 bin/pnpm.mjs 或 bin/pnpm.cjs')
+}
+
+/** 写 pnpm shim：dsh 内部 spawnSync('pnpm') 靠 PATH 找到它，shim 用内置 node 跑 pnpm 入口。 */
+function writePnpmShim(entry) {
   if (isWin) {
-    writeFileSync(join(binDir, 'pnpm.cmd'), `@"%~dp0${nodeName}" "%~dp0..\\pnpm\\bin\\pnpm.cjs" %*\r\n`)
+    writeFileSync(join(binDir, 'pnpm.cmd'), `@"%~dp0${nodeName}" "%~dp0..\\pnpm\\bin\\${entry}" %*\r\n`)
   } else {
-    writeFileSync(join(binDir, 'pnpm'), `#!/bin/sh\nexec "$(dirname "$0")/${nodeName}" "$(dirname "$0")/../pnpm/bin/pnpm.cjs" "$@"\n`)
+    writeFileSync(join(binDir, 'pnpm'), `#!/bin/sh\nexec "$(dirname "$0")/${nodeName}" "$(dirname "$0")/../pnpm/bin/${entry}" "$@"\n`)
     chmodSync(join(binDir, 'pnpm'), 0o755)
   }
 }
@@ -152,7 +165,7 @@ await fetchNode(nodeVersion)
 const pnpmVersion = await pinnedPnpmVersion()
 console.log(`[collect-runtime] pnpm ${pnpmVersion}（${PNPM_MAJOR}.x 固定线，非 latest）`)
 await fetchPnpm(pnpmVersion)
-console.log(`[collect-runtime] pnpm 自检通过：${assertPnpmRunnable(pnpmVersion)}`)
+await fetchPnpmNativeBinary(pnpmVersion)
 
-writePnpmShim()
+writePnpmShim(resolvePnpmEntry())
 console.log(`[collect-runtime] done: ${target}`)

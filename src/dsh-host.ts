@@ -33,13 +33,23 @@ export interface DshHost {
   launchUrl: () => string | undefined
 }
 
+/** Node 默认 max-http-header-size=16KiB。打包版若漏清 cookie，combo URL 会 431。 */
+const RAISED_HTTP_HEADER_SIZE = '--max-http-header-size=65536'
+
+/** 给 dsh 子进程抬高 HTTP 头上限，且不覆盖调用方已设置的同名 flag。 */
+export function withRaisedHttpHeaderLimit(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const current = env.NODE_OPTIONS ?? ''
+  if (/(?:^|\s)--max-http-header-size=/.test(current)) return env
+  return { ...env, NODE_OPTIONS: current === '' ? RAISED_HTTP_HEADER_SIZE : `${current} ${RAISED_HTTP_HEADER_SIZE}` }
+}
+
 /**
  * spawn dsh web 子进程，用内置 node 跑外置 dsh（打包与开发模式一致）。
  * @param port - 回环端口。
  * @param bin - dsh CLI 入口（由 main.ts 先 `ensureDshInstalled()` 解析）。
  */
 export function startDsh(port: number, bin: string): DshHost {
-  const env: NodeJS.ProcessEnv = withBundledBinPath({ ...process.env })
+  const env: NodeJS.ProcessEnv = withRaisedHttpHeaderLimit(withBundledBinPath({ ...process.env }))
   // --no-open：桌面壳自己用 BrowserWindow 渲染这个 host，不允许 dsh 再拉起
   // 系统默认浏览器（rc.8 起 web-app 默认会在启动后打开默认浏览器）。
   const args = [bin, 'web', '--host', DSH_HOST, '--port', String(port), '--no-open']
