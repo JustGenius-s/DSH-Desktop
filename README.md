@@ -58,12 +58,15 @@ pnpm start        # first launch installs @deepseek-ai/dsh (~1-2 min)
 
 Dev and packaged behave identically: both use the bundled node and the external `~/.dsh/runtime`.
 
-Port persistence tests (no Electron window or browser required):
+Tests (no Electron window or browser required):
 
 ```sh
-npm run build
-node --test test/web-port.test.cjs
+pnpm test          # vitest for test/*.test.ts + node --test for test/*.test.cjs
+pnpm typecheck
 ```
+
+The TypeScript suites run under vitest; the `*.test.cjs` suites are plain
+`node:test` (see `vitest.config.ts`, which deliberately excludes them).
 
 ## Package
 

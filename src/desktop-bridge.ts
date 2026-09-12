@@ -6,11 +6,12 @@
  * dsh-desktop-update 插件的 host 半侧：它跑在 dsh web host 的 Node 进程里，
  * 没有 CORS 限制，也不依赖某个窗口开着。新插件走那条路。
  *
- * 但 npm 上目前还没有 0.2.0 的插件，已装的还是 0.1.x（REQUIRED_VERSION 停在
- * 0.1.2，见 scripts/install-desktop-plugin.mjs）：它们只认壳侧的 getState /
- * checkNow / setGate / setDshChannel / skipVersion。这批端点连同状态机一起
- * 保留成「兼容层」，让旧插件不至于连更新徽章都拿不到；等 0.2.0 插件发布、
- * REQUIRED_VERSION 提上去之后，本文件可以只留执行端点。
+ * 但 npm 上 `@just-genius/dsh-desktop-update` 最新仍是 0.1.3，而壳侧
+ * REQUIRED_VERSION 已提到 0.2.0（见 scripts/install-desktop-plugin.mjs）：
+ * 0.2.0 发布前插件装不上，0.1.x 装上去也只认壳侧的 getState / checkNow /
+ * setGate / setDshChannel / skipVersion。这批端点连同状态机一起保留成
+ * 「兼容层」，让已装的旧插件不至于连更新徽章都拿不到；等 0.2.0 发布后，
+ * 本文件可以只留执行端点。
  *
  * ── 壳独有的执行能力 ──────────────────────────────────────────
  * 只有打包后的桌面应用做得到：报自己的版本号、跑 `pnpm add` 装运行时、

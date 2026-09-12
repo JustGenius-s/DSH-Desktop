@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "vitest run",
+    "test": "vitest run && node --test test/*.test.cjs",
     "test:watch": "vitest",
     "collect": "node scripts/collect-runtime.mjs",
     "start": "npm run build && electron .",

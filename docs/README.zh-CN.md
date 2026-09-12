@@ -56,6 +56,13 @@ pnpm start        # 首次启动会安装 @deepseek-ai/dsh（约 1-2 分钟）
 
 开发和打包行为完全一致：都用内置 node 和外部 `~/.dsh/runtime`。
 
+测试（不需要 Electron 窗口或浏览器）：
+
+```sh
+pnpm test          # test/*.test.ts 走 vitest，test/*.test.cjs 走 node --test
+pnpm typecheck
+```
+
 ## 打包
 
 ```sh
