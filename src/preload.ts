@@ -5,8 +5,9 @@
  * 不引入 Menu / Tray / Notification / BrowserWindow。普通浏览器没有 window.dshDesktop。
  */
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import type {
+  DesktopBootFailure,
   DesktopContribution,
   DesktopNotifyAction,
   DesktopNotifySpec,
@@ -15,10 +16,14 @@ import type {
   DesktopOverlayOpenSpec,
   DesktopOverlayUpdateSpec,
   DesktopPluginInfo,
-  DesktopBootFailure,
+  DesktopRestartChoice,
+  DesktopRestartPrompt,
   DesktopSeatAction,
   DesktopSeatName,
+  DshChannel,
   DshDesktop,
+  DesktopUpdateKind,
+  DesktopUpdateState,
 } from './api'
 import type { Ipc as IpcShape } from './ipc'
 
@@ -33,6 +38,16 @@ const Ipc = {
     appVersion: 'desktop:updates:app-version',
     downloadApp: 'desktop:updates:download-app',
     updateDsh: 'desktop:updates:update-dsh',
+    restartWeb: 'desktop:updates:restart-web',
+    prompt: 'desktop:updates:prompt',
+    promptAck: 'desktop:updates:prompt-ack',
+    promptResponse: 'desktop:updates:prompt-response',
+    getState: 'desktop:updates:get-state',
+    state: 'desktop:updates:state',
+    checkNow: 'desktop:updates:check-now',
+    setDshChannel: 'desktop:updates:set-dsh-channel',
+    skipVersion: 'desktop:updates:skip-version',
+    setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
@@ -65,13 +80,42 @@ const Ipc = {
 } satisfies typeof IpcShape
 
 const api: DshDesktop = {
-  // 只执行，不检测：状态与配置归插件 host 半侧（见 api.ts 顶部说明）。
   updates: {
+    // ---- 执行端点：正式契约 ----
     appVersion: (): Promise<string> => ipcRenderer.invoke(Ipc.updates.appVersion),
     downloadApp: (url?: string): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp, url),
-    updateDsh: (version: string): Promise<void> =>
+    updateDsh: (version?: string): Promise<void> =>
       ipcRenderer.invoke(Ipc.updates.updateDsh, version),
+    restartWeb: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.restartWeb),
     relaunch: (): void => ipcRenderer.send(Ipc.updates.relaunch),
+
+    // ---- 热重启询问：主进程推、页面渲染 Modal 后回执 ----
+    onPrompt: (listener: (prompt: DesktopRestartPrompt) => void): (() => void) => {
+      const wrapped = (_event: unknown, prompt: DesktopRestartPrompt) => listener(prompt)
+      ipcRenderer.on(Ipc.updates.prompt, wrapped)
+      return () => ipcRenderer.removeListener(Ipc.updates.prompt, wrapped)
+    },
+    ackPrompt: (id: string): void => {
+      ipcRenderer.send(Ipc.updates.promptAck, id)
+    },
+    respondPrompt: (id: string, choice: DesktopRestartChoice): void => {
+      ipcRenderer.send(Ipc.updates.promptResponse, id, choice)
+    },
+
+    // ---- 兼容层：仅 0.1.x 旧插件用；新插件的检测在插件 host 半侧 ----
+    getState: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.getState),
+    onState: (listener: (state: DesktopUpdateState) => void): (() => void) => {
+      const wrapped = (_event: unknown, state: DesktopUpdateState) => listener(state)
+      ipcRenderer.on(Ipc.updates.state, wrapped)
+      return () => ipcRenderer.removeListener(Ipc.updates.state, wrapped)
+    },
+    checkNow: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.checkNow),
+    setDshChannel: (channel: DshChannel, version?: string): Promise<DesktopUpdateState> =>
+      ipcRenderer.invoke(Ipc.updates.setDshChannel, channel, version),
+    skipVersion: (kind: DesktopUpdateKind): Promise<void> =>
+      ipcRenderer.invoke(Ipc.updates.skipVersion, kind),
+    setGate: (kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState> =>
+      ipcRenderer.invoke(Ipc.updates.setGate, kind, enabled),
   },
   seats: {
     list: () => ipcRenderer.invoke(Ipc.seats.list),
@@ -123,3 +167,83 @@ const api: DshDesktop = {
 }
 
 contextBridge.exposeInMainWorld('dshDesktop', api)
+
+// 必须在页面主世界替换 Notification：主进程 executeJavaScript 进不到
+// contextIsolation 下的页面世界，插件会继续走被系统静默丢掉的浏览器 API。
+const WEB_NOTIFICATION_BRIDGE = `(() => {
+  if (window.__dshNotifyBridge) return
+  const desktop = window.dshDesktop
+  if (desktop === undefined || desktop.notify === undefined) return
+  window.__dshNotifyBridge = true
+  const CONTRIBUTOR = 'web-notification'
+  const instances = new Map()
+  function toId(tag) {
+    const raw = String(tag || ('n' + Date.now())).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 64)
+    return /^[A-Za-z0-9]/.test(raw) ? raw : ('n' + raw).slice(0, 64)
+  }
+  class DesktopNotification {
+    static get permission() { return 'granted' }
+    static requestPermission() {
+      void desktop.notify.show({
+        contributor: CONTRIBUTOR,
+        id: toId('permission-' + Date.now()),
+        title: 'DSH-Desktop',
+        body: '通知已接通',
+      })
+      return Promise.resolve('granted')
+    }
+    static get maxActions() { return 0 }
+    constructor(title, options) {
+      const opts = options === undefined || options === null ? {} : options
+      this.title = String(title ?? '')
+      this.body = String(opts.body ?? '')
+      this.tag = opts.tag
+      this.onclick = null
+      this.onshow = null
+      this.onerror = null
+      this.onclose = null
+      this._id = toId(opts.tag)
+      instances.set(this._id, this)
+      const shownTitle = this.title.slice(0, 80) || 'DSH'
+      const shownBody = (this.body === '' ? ' ' : this.body).slice(0, 240)
+      void desktop.notify.show({
+        contributor: CONTRIBUTOR,
+        id: this._id,
+        title: shownTitle,
+        body: shownBody,
+        silent: opts.silent === true,
+      }).then((result) => {
+        if (result !== undefined && result.shown === true) {
+          if (typeof this.onshow === 'function') this.onshow(new Event('show'))
+        } else if (typeof this.onerror === 'function') {
+          this.onerror(new Event('error'))
+        }
+      }).catch(() => {
+        if (typeof this.onerror === 'function') this.onerror(new Event('error'))
+      })
+    }
+    close() {
+      void desktop.notify.close(CONTRIBUTOR, this._id)
+      if (typeof this.onclose === 'function') this.onclose(new Event('close'))
+    }
+    addEventListener(type, fn) {
+      if (type === 'click') this.onclick = fn
+      else if (type === 'show') this.onshow = fn
+      else if (type === 'error') this.onerror = fn
+      else if (type === 'close') this.onclose = fn
+    }
+    removeEventListener(type, fn) {
+      if (type === 'click' && this.onclick === fn) this.onclick = null
+      else if (type === 'show' && this.onshow === fn) this.onshow = null
+      else if (type === 'error' && this.onerror === fn) this.onerror = null
+      else if (type === 'close' && this.onclose === fn) this.onclose = null
+    }
+  }
+  desktop.notify.onAction((action) => {
+    if (action.contributor !== CONTRIBUTOR) return
+    const inst = instances.get(action.id)
+    if (inst !== undefined && typeof inst.onclick === 'function') inst.onclick(new Event('click'))
+  })
+  window.Notification = DesktopNotification
+})()`
+void webFrame.executeJavaScript(WEB_NOTIFICATION_BRIDGE).catch(() => {})

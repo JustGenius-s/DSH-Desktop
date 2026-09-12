@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "vitest run",
+    "test": "vitest run && node --test test/*.test.cjs",
     "test:watch": "vitest",
     "collect": "node scripts/collect-runtime.mjs",
     "start": "npm run build && electron .",
@@ -36,6 +36,7 @@
       "dist/**/*",
       "package.json",
       "build/icon-app.png",
+      "build/icon-mac.png",
       "build/icon.png",
       "build/splash.html",
       "build/plugin-recovery.html"
@@ -46,7 +47,9 @@
         "to": "runtime",
         "filter": [
           "**/*",
-          "!**/*.map"
+          "!**/*.exe",
+          "!**/*.map",
+          "!**/pnpm/dist/node_modules/@reflink/**"
         ]
       },
       {
@@ -55,6 +58,10 @@
         "filter": [
           "install-desktop-plugin.mjs"
         ]
+      },
+      {
+        "from": "build/icon-mac.png",
+        "to": "dock-icon.png"
       }
     ],
     "asar": true,
@@ -66,17 +73,18 @@
     "mac": {
       "icon": "build/icon.icns",
       "extendInfo": {
-        "NSUserNotificationAlertStyle": "alert"
+        "NSUserNotificationAlertStyle": "alert",
+        "LSUIElement": false
       },
       "category": "public.app-category.developer-tools",
       "target": [
         "dmg",
         "zip"
       ],
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "notarize": true,
-      "identity": "Electron Dev"
+      "notarize": false,
+      "identity": null
     },
     "win": {
       "icon": "build/icon.ico",
@@ -93,7 +101,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false
-    }
+    },
+    "buildVersion": "2026082618"
   },
   "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017"
 }

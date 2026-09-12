@@ -222,6 +222,65 @@ async function latestDshVersion(): Promise<string | undefined> {
   }
 }
 
+/**
+ * 查 npm registry 上 `@deepseek-ai/dsh` 的全部 dist-tags；失败返回 undefined。
+ *
+ * 仅供壳侧兼容层的更新检测与首装使用。用 `session.defaultSession.fetch`
+ * 而非全局 fetch：它走 Chromium 栈，不触发 Node TLS，绕开打包版
+ * SetRootCerts 崩溃（见 latestDshVersion 的同款注释）。
+ */
+async function fetchDshDistTags(): Promise<Record<string, string> | undefined> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const res = await session.defaultSession.fetch('https://registry.npmjs.org/@deepseek-ai%2Fdsh', {
+      signal: controller.signal,
+    })
+    if (!res.ok) return undefined
+    const body = (await res.json()) as { 'dist-tags'?: unknown }
+    const tags = body['dist-tags']
+    if (tags === null || typeof tags !== 'object') return undefined
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(tags as Record<string, unknown>)) {
+      if (typeof value === 'string') out[key] = value
+    }
+    return out
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** 判断一个字符串是否像 npm 包版本（不含 tag 语义）——用于 custom 渠道兜底校验。 */
+export function looksLikeVersion(input: string): boolean {
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(input.trim())
+}
+
+/**
+ * 按更新渠道解析目标版本（壳侧兼容层用；新插件的检测在它自己的 host 半侧）：
+ * - `latest` / `next` / `alpha`：读 npm 上同名 dist-tag；标签不存在返回 undefined。
+ *   （`alpha` 是上游发 alpha 时专用的 tag，发 alpha 不会动 `latest`，
+ *   所以必须显式支持这个渠道，否则 alpha 版本永远检测不到。）
+ * - `custom`：`exact` 指定精确版本直接采用；否则按 channel 解析 dist-tag。
+ * 全部失败返回 undefined（调用方静默吞掉，保持现状）。
+ */
+export async function resolveDshChannelVersion(
+  channel: 'latest' | 'next' | 'alpha' | 'custom',
+  exact?: string,
+): Promise<string | undefined> {
+  const tags = await fetchDshDistTags()
+  if (tags === undefined) return undefined
+  if (channel === 'custom') {
+    const version = (exact ?? '').trim()
+    if (version !== '' && looksLikeVersion(version)) return version
+    return undefined
+  }
+  const version = tags[channel]
+  if (typeof version !== 'string' || version === '') return undefined
+  return version
+}
+
 /** 首次启动时安装最新版 `@deepseek-ai/dsh`（已装则跳过），返回 bin.js 路径。 */
 export async function ensureDshInstalled(onStatus?: (message: string) => void): Promise<string> {
   const bin = installedDshBin()

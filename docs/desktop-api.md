@@ -24,35 +24,64 @@ if (desktop === undefined) return // 非桌面壳，空操作
 
 ## `updates`
 
-**壳只执行，不检测。** 检测（查 GitHub Releases / npm registry、比较版本、定期间隔、
-「跳过该版本」记录）全部在 [dsh-desktop-update](https://github.com/JustGenius-s/DSH-Plugs)
+**检测在插件，执行在壳。** 检测（查 GitHub Releases / npm registry、比较版本、定期间隔、
+「跳过该版本」记录）在 [dsh-desktop-update](https://github.com/JustGenius-s/DSH-Plugs)
 插件的 **host 半侧**：它跑在 dsh web host 的 Node 进程里，没有 CORS 限制，也不依赖
 某个窗口开着。插件通过自己的同源路由（`/dsh-desktop-update/state` 等）把结果提供给
-网页。
+网页。新插件请用那条路。
 
-壳这族只剩四件事——每件都是只有打包好的桌面应用做得到的：
+壳这族只留只有打包好的桌面应用做得到的事——**执行**：
 
 ```ts
 const version = await desktop.updates.appVersion()   // 壳的打包版本，如 '0.2.0'
 await desktop.updates.downloadApp(url)               // 用系统浏览器打开发布页
-await desktop.updates.updateDsh('0.1.2-alpha.3')     // pnpm 装指定版本；装完需 relaunch
-desktop.updates.relaunch()                           // 重启应用
+await desktop.updates.updateDsh('0.1.2-alpha.3')     // pnpm 装指定版本
+await desktop.updates.restartWeb()                   // 热重启 dsh web，桌面壳不退出
+desktop.updates.onPrompt((prompt) => { /* 用 DSH Modal 渲染 */ })
+desktop.updates.ackPrompt(prompt.id)
+desktop.updates.respondPrompt(prompt.id, 'later')    // 或 'restart'
+desktop.updates.relaunch()                           // 重启整个桌面应用
 ```
 
 要点：
 
-- 没有 `getState` / `onState` / `checkNow` / `setGate` / `setDshChannel` /
-  `skipVersion` 了。状态与配置归插件：自动检查开关与 DSH 更新渠道写在
-  `~/.dsh/settings.yaml` 的 `desktop-update` 分节，由插件 host 半侧注册并 watch。
-- `updateDsh` **必须带目标版本**。壳不知道 latest 是什么，也不判断该不该更新。
+- `updateDsh` 的目标版本由新插件给出；壳不知道 latest 是什么，也不判断该不该更新。
 - 执行进度不由壳广播。插件的 browser 半侧驱动执行后，把成败回报给它自己的
   host 半侧（`POST /dsh-desktop-update/exec`），因此进度跨窗口一致，刷新页面也不丢。
 - `downloadApp(url)` 只接受 `https://github.com/` 开头的地址，否则回落到仓库
   Releases 页——避免网页借壳打开任意 URL。
+- `restartWeb()` 只杀掉并拉起 `dsh web` 子进程，再刷新主窗口；Electron 壳、席位、
+  托盘都还在。装完 DSH 运行时、或插件配置变了之后，壳会通过 `onPrompt` 推一条
+  询问，由插件用 DSH Modal 渲染「稍后 / 立即重启服务」——不是系统原生 dialog，
+  也不强制。用户点「稍后」后同一份变更不再烦，再改才再问。
+
+### 兼容层（0.1.x 旧插件）
+
+npm 上暂无 `dsh-desktop-update@0.2.0`，已装的插件还是 0.1.x，只认壳侧的这批端点。
+它们保留到 0.2.0 插件发布为止（见 `scripts/install-desktop-plugin.mjs` 的
+`REQUIRED_VERSION`），**新插件不要依赖**：
+
+```ts
+const state = await desktop.updates.getState()
+const stop = desktop.updates.onState((next) => { /* ... */ })
+await desktop.updates.checkNow()
+await desktop.updates.setDshChannel('next')          // 或 'latest' / 'alpha' / 'custom'
+await desktop.updates.skipVersion('app')             // 或 'dsh'
+await desktop.updates.setGate('dsh', false)
+```
+
+兼容层的状态与配置写在 `~/.dsh/settings.yaml` 的 `desktop-update` 分节，壳自己
+watch 并 6 小时轮询一次；`updateDsh()` 不传版本时由壳按当前渠道解析。
 
 浏览器半侧是唯一同时触达两侧（壳的 preload 与 host 的路由）的地方，所以由它
 摆渡两件谁都做不了的事：把壳的版本号交给 host（检测 App 更新要用），把执行
 结果交给 host（进度要共享）。
+
+主进程还监听 `~/.dsh/profiles/web/` 下的 `package.json`、`cordis.patch.yml`、
+`cordis.yml`：配置变了但当前网页服务还没加载时，通过 `onPrompt` 让桌面插件用
+DSH Modal 询问「稍后 / 立即重启服务」（不是系统原生 dialog）。同一份变更点
+「稍后」后不再烦，再改才再问。插件安装/升级、DSH 运行时更新也走同一套询问，
+不强制。`relaunch()` 才会退出并拉起整个桌面应用。
 
 ## `seats`
 
@@ -114,6 +143,8 @@ await desktop.notify.close('desktop-update') // 该 contributor 全部
 - 插件卸载时应 `close(contributor)`
 
 macOS 打包包在 `Info.plist` 里声明了 `NSUserNotificationAlertStyle=alert`。开发态 `pnpm start` 走 Electron 二进制，通知可能显示为 Electron，系统也可能先问权限。
+
+网页里的 `new Notification()`（例如 `dsh-notification` 插件）由主窗口 preload 接到本族原生通知。Chromium 自己的 Notification API 在桌面壳里会显示已授权、却不向系统申请 UNUserNotificationCenter，横幅被静默丢掉。
 
 ## `overlays`
 

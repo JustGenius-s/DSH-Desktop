@@ -8,9 +8,10 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { get } from 'node:http'
 import { bundledNodeBin, withBundledBinPath } from './runtime-manager'
+import { DSH_HOST } from './web-port'
 
 /** host 只绑定回环地址：桌面端单机使用，绝不对外网暴露 RCE 面。 */
-export const DSH_HOST = '127.0.0.1'
+export { DSH_HOST, findFreePort } from './web-port'
 
 /** dsh 启动后轮询就绪的总超时。 */
 export const READY_TIMEOUT_MS = 30_000
@@ -30,20 +31,6 @@ export interface DshHost {
    * 尚未打印则为 undefined。
    */
   launchUrl: () => string | undefined
-}
-
-/** 分配一个空闲的回环 TCP 端口。 */
-export function findFreePort(): Promise<number> {
-  return new Promise((resolvePort, reject) => {
-    const srv = createServer()
-    srv.unref()
-    srv.on('error', reject)
-    srv.listen(0, DSH_HOST, () => {
-      const addr = srv.address()
-      const port = typeof addr === 'object' && addr !== null ? addr.port : 0
-      srv.close(() => resolvePort(port))
-    })
-  })
 }
 
 /** Node 默认 max-http-header-size=16KiB。打包版若漏清 cookie，combo URL 会 431。 */
@@ -147,4 +134,65 @@ export async function waitForReady(
   if (printed !== undefined) return printed
   if (signal?.aborted) return `${origin}/`
   throw new Error(`dsh host 未在 ${timeoutMs}ms 内就绪（${origin}/）`)
+}
+
+/** 等子进程退出，最多等 timeoutMs；已退出则立刻返回。 */
+export function onceExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  return new Promise((resolveExit) => {
+    if (child.exitCode !== null) {
+      resolveExit()
+      return
+    }
+    const timer = setTimeout(resolveExit, timeoutMs)
+    const onExit = (): void => {
+      clearTimeout(timer)
+      resolveExit()
+    }
+    child.once('exit', onExit)
+    if (child.exitCode !== null) {
+      child.off('exit', onExit)
+      clearTimeout(timer)
+      resolveExit()
+    }
+  })
+}
+
+/** SIGTERM 后等待，仍在则 SIGKILL。进程已不在时当作成功。 */
+export async function stopDsh(child: ChildProcess, timeoutMs = 3000): Promise<void> {
+  if (child.exitCode !== null) return
+  try {
+    child.kill('SIGTERM')
+  } catch {
+    return
+  }
+  await onceExit(child, timeoutMs)
+  if (child.exitCode === null) {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      return
+    }
+    await onceExit(child, 1000)
+  }
+}
+
+function tryListen(port: number): Promise<boolean> {
+  return new Promise((resolveListen) => {
+    const srv = createServer()
+    srv.unref()
+    srv.once('error', () => resolveListen(false))
+    srv.listen(port, DSH_HOST, () => {
+      srv.close(() => resolveListen(true))
+    })
+  })
+}
+
+/** 等回环端口被释放，超时抛错（热重启要尽量复用原端口，避免改 origin）。 */
+export async function waitForPortFree(port: number, timeoutMs = 8000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await tryListen(port)) return
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(`端口 ${port} 在 ${timeoutMs}ms 内未释放`)
 }
