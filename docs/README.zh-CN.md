@@ -44,7 +44,7 @@ Electron 主进程
   └─ BrowserWindow → http://127.0.0.1:<端口>
 ```
 
-DSH 在运行时从 npm 安装，不随应用打包。升级 DSH = 启动时检测到新版本 → 点击 "Update" → 重启，无需重新构建或签名。
+DSH 在运行时从 npm 安装，不随应用打包。升级 DSH = 启动时检测到新版本 → 点击 "Update" → 可选择重启网页服务（桌面应用本身不退出），无需重新构建或签名。
 
 ## 开发
 
@@ -55,6 +55,13 @@ pnpm start        # 首次启动会安装 @deepseek-ai/dsh（约 1-2 分钟）
 ```
 
 开发和打包行为完全一致：都用内置 node 和外部 `~/.dsh/runtime`。
+
+测试（不需要 Electron 窗口或浏览器）：
+
+```sh
+pnpm test          # test/*.test.ts 走 vitest，test/*.test.cjs 走 node --test
+pnpm typecheck
+```
 
 ## 打包
 

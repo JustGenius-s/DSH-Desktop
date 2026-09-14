@@ -36,10 +36,38 @@ async function latestNodeVersion() {
   return list[0].version // e.g. v24.19.0
 }
 
-/** pnpm 最新版号。 */
-async function latestPnpmVersion() {
-  const doc = JSON.parse(await (await fetch('https://registry.npmjs.org/pnpm/latest')).text())
-  return doc.version
+/**
+ * 内置 pnpm 的版本范围。
+ *
+ * **不要改成 `latest`。** pnpm 12 起入口与原生二进制都换了形状：只剩
+ * `bin/pnpm.mjs`（`pnpm.cjs` 被删除），且首次使用要**联网下载**原生二进制。
+ * 对一个「首启要装 DSH 运行时」的路径来说，那个隐式网络依赖不能接受，因此
+ * 这里固定在 11.x——它是最后一条 tarball 自带 JS 实现、入口完整的版本线。
+ * （主进程侧已改为按实际存在的文件挑入口，见 runtime-manager.ts 的
+ * `bundledPnpmEntry()`；这里固定版本是为了别把网络依赖带进打包产物。）
+ * 下面的 `fetchPnpmNativeBinary()` 对 11.x 因此是空操作。
+ */
+const PNPM_MAJOR = 11
+
+/** pnpm 版本号：锁定 `PNPM_MAJOR` 主版本下的最新一个，而不是 `latest`。 */
+async function pinnedPnpmVersion() {
+  const doc = JSON.parse(await (await fetch('https://registry.npmjs.org/pnpm')).text())
+  const candidates = Object.keys(doc.versions)
+    .filter((version) => version.startsWith(`${PNPM_MAJOR}.`))
+    .filter((version) => version.includes('-') === false)
+  if (candidates.length === 0) {
+    throw new Error(`npm registry 里找不到 pnpm ${PNPM_MAJOR}.x 的稳定版本`)
+  }
+  // 语义化排序：逐段数值比较，避免字符串序把 11.9 排在 11.26 后面。
+  candidates.sort((a, b) => {
+    const left = a.split('.').map(Number)
+    const right = b.split('.').map(Number)
+    for (let i = 0; i < 3; i += 1) {
+      if (left[i] !== right[i]) return left[i] - right[i]
+    }
+    return 0
+  })
+  return candidates[candidates.length - 1]
 }
 
 /** 下载并解出目标平台的 node 二进制到 bin/。 */
@@ -134,8 +162,8 @@ const nodeVersion = await latestNodeVersion()
 console.log(`[collect-runtime] node ${nodeVersion} (${nodeOs}-${arch})`)
 await fetchNode(nodeVersion)
 
-const pnpmVersion = await latestPnpmVersion()
-console.log(`[collect-runtime] pnpm ${pnpmVersion}`)
+const pnpmVersion = await pinnedPnpmVersion()
+console.log(`[collect-runtime] pnpm ${pnpmVersion}（${PNPM_MAJOR}.x 固定线，非 latest）`)
 await fetchPnpm(pnpmVersion)
 await fetchPnpmNativeBinary(pnpmVersion)
 

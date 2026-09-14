@@ -1,7 +1,7 @@
 /**
  * 插件隔离：dsh 启动失败时，从子进程输出中归因故障插件、把它从 web
  * profile 的 bundles 里摘除（禁用），并把隔离记录写到 userData 下的
- * quarantined-plugins.json，供启动成功后的提示与「恢复并重启」使用。
+ * quarantined-plugins.json，供启动成功后的提示与「恢复并重启服务」使用。
  *
  * 只隔离能明确归因的第三方 bundle；@deepseek-ai/* 核心 bundle 永远不动
  * （禁了 dsh 更起不来）。归因不到时 extractFailedPlugins 返回空，由

@@ -10,36 +10,137 @@
  * ── 更新职责的划分（0.2.0 起）────────────────────────────────
  * 检测（查 GitHub Releases / npm registry、比版本、定期间隔）已迁到
  * dsh-desktop-update 插件的 host 半侧：它跑在 dsh web host 的 Node 进程里，
- * 没有 CORS 限制，也不依赖窗口开着。壳不再检测任何东西。
+ * 没有 CORS 限制，也不依赖窗口开着。
  *
- * 壳只保留只有它做得到的事——执行：报自己的版本号、跑 `pnpm add` 装运行时、
- * 打开下载页、重启。插件的 browser 半侧是唯一能同时触达两侧的地方，由它
- * 把「壳的版本」和「执行的成败」转交给插件 host 半侧。
+ * 壳侧仍保留一套检测作为兼容层：已装插件可能还是 0.1.x（npm 上暂无
+ * 0.2.0），它们只认 getState / checkNow / setGate / setDshChannel /
+ * skipVersion；这些端点留着，旧插件不至于连更新徽章都拿不到。新插件
+ * 走 host 半侧检测，只用下面四个「只有壳做得到」的执行端点。
+ *
+ * 壳独有的执行能力：报自己的版本号、跑 `pnpm add` 装运行时、打开下载页、
+ * 热重启网页服务、重启整个应用。
  */
 
 /** contributor 与条目 id：字母数字开头，最长 64。 */
 export const DESKTOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 // ---------------------------------------------------------------------------
-// updates — 只执行，不检测
+// updates — 执行（只有壳做得到）+ 兼容旧插件的检测层
 // ---------------------------------------------------------------------------
 
+/** App 本体或 DSH 运行时的一则可更新信息；无更新时为 null。 */
+export interface DesktopUpdateInfo {
+  current: string
+  latest: string
+  url?: string
+}
+
 /**
- * 桌面壳的更新执行器。
+ * DSH 运行时更新渠道：npm dist-tag，或 `custom` 表示按精确版本匹配。
+ * `alpha` 对应 npm 的 `alpha` dist-tag（上游发 alpha 时不会动 `latest`，
+ * 不加这个渠道的话 alpha 版本永远不会出现在检测结果里）。
+ */
+export type DshChannel = 'latest' | 'next' | 'alpha' | 'custom'
+
+/** 两个自动检查开关 + DSH 更新渠道（持久化在 DSH settings.yaml 的 desktop-update 分节）。 */
+export interface DesktopUpdateConfig {
+  checkApp: boolean
+  checkDsh: boolean
+  /** DSH 运行时匹配渠道；仅 `custom` 时 `dshVersion` 参与。 */
+  dshChannel?: DshChannel
+  /** 精确匹配的版本（dshChannel === 'custom' 时生效）。 */
+  dshVersion?: string
+}
+
+/**
+ * 壳侧兼容层的更新状态快照。
  *
- * 刻意不含任何「当前有没有更新」的状态：那是插件 host 半侧的领域，
- * 由它检测并广播。壳不知道也不需要知道 latest 是什么——`updateDsh` 的
- * 目标版本由调用方（插件）给出。
+ * 新插件不读它——检测在插件 host 半侧；这里只给 0.1.x 旧插件用，以及给
+ * 壳自己判断「刚装完运行时、要不要问一句是否热重启」。
+ */
+export interface DesktopUpdateState {
+  app: DesktopUpdateInfo | null
+  dsh: DesktopUpdateInfo | null
+  checking: boolean
+  /** 正在执行 `pnpm add @deepseek-ai/dsh@…`。 */
+  updatingDsh: boolean
+  /** 更新过程中的进度/结果文案；空闲时为 null。 */
+  updateMessage: string | null
+  /** 运行时已装完新版本，需重启（热重启或整壳重启）才生效。 */
+  needsRelaunch: boolean
+  config: DesktopUpdateConfig
+  /** 当前安装版本（无更新态弹层用；app 恒有值，dsh 未安装时为 null）。 */
+  versions: { app: string; dsh: string | null }
+}
+
+export type DesktopUpdateKind = 'app' | 'dsh'
+
+/** 询问热重启网页服务的原因。 */
+export type DesktopRestartWebReason = 'plugin' | 'dsh-runtime'
+
+/** 用户对热重启询问的选择。 */
+export type DesktopRestartChoice = 'later' | 'restart'
+
+/**
+ * 主进程推到网页的热重启询问文案。由桌面插件用 DSH Modal 渲染，
+ * 不要走系统原生 dialog。
+ */
+export interface DesktopRestartPrompt {
+  id: string
+  reason: DesktopRestartWebReason
+  title: string
+  message: string
+  detail: string
+  later: string
+  restart: string
+}
+
+/**
+ * 桌面壳的更新执行器 + 兼容层。
+ *
+ * 执行端点（appVersion / downloadApp / updateDsh / restartWeb / relaunch）
+ * 是壳的正式契约：只有壳做得到这些事。`updateDsh` 的目标版本由调用方
+ * （新插件）给出；兼容旧插件时不带版本也能调，壳自己解析渠道取版本。
+ *
+ * 检测端点（getState / onState / checkNow / setGate / setDshChannel /
+ * skipVersion）仅为兼容 0.1.x 旧插件保留，新插件不要依赖。
  */
 export interface DshDesktopUpdates {
   /** 壳自身的打包版本（如 `0.2.0`）；插件需要它才能比较 App 更新。 */
   appVersion(): Promise<string>
-  /** 打开浏览器到 App 的发布页（下载新版本）。 */
-  downloadApp(): Promise<void>
-  /** 把 DSH 运行时装成指定版本（pnpm add）；完成后需 relaunch 才生效。 */
-  updateDsh(version: string): Promise<void>
-  /** 重启应用。 */
+  /** 打开浏览器到 App 的发布页（下载新版本）。只接受 GitHub 地址。 */
+  downloadApp(url?: string): Promise<void>
+  /**
+   * 把 DSH 运行时装成指定版本（pnpm add）。
+   * 省略版本（旧插件）时按当前渠道解析；装完后可 restartWeb 生效，
+   * 不强制整壳 relaunch。
+   */
+  updateDsh(version?: string): Promise<void>
+  /** 热重启 dsh web 子进程并刷新窗口；Electron 壳不退出。 */
+  restartWeb(): Promise<void>
+  /** 重启整个桌面应用（壳 + 网页服务）。 */
   relaunch(): void
+
+  // ---- 兼容层：仅 0.1.x 旧插件使用，新插件请用插件 host 半侧的检测 ----
+
+  /** 读壳侧兼容层维护的更新状态快照。 */
+  getState(): Promise<DesktopUpdateState>
+  /** 订阅状态广播（旧插件的更新徽章靠它刷新）。 */
+  onState(listener: (state: DesktopUpdateState) => void): () => void
+  /** 立即检查一次并广播。 */
+  checkNow(): Promise<DesktopUpdateState>
+  /** 写 DSH 更新渠道；写后立即按新渠道重查并广播。 */
+  setDshChannel(channel: DshChannel, version?: string): Promise<DesktopUpdateState>
+  /** 「跳过该版本」：当前 latest 不再提示，出现更新的版本后恢复。 */
+  skipVersion(kind: DesktopUpdateKind): Promise<void>
+  /** 写一个自动检查开关。 */
+  setGate(kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState>
+  /** 订阅主进程的热重启询问；页面用 DSH 组件渲染。 */
+  onPrompt(listener: (prompt: DesktopRestartPrompt) => void): () => void
+  /** 页面已接到询问、即将展示 DSH Modal。 */
+  ackPrompt(id: string): void
+  /** 用户选择「稍后」或「立即重启服务」。 */
+  respondPrompt(id: string, choice: DesktopRestartChoice): void
 }
 
 // ---------------------------------------------------------------------------
@@ -253,8 +354,9 @@ export interface DshDesktopPlugins {
 
 /**
  * 桌面壳注入到网页的标准 API。五族并列：
- * updates = 更新执行（检测已迁到插件 host 半侧）；seats = 持久原生 UI 贡献；
- * notify = 短暂系统通知；overlays = 同源原生小窗；plugins = 插件清单。
+ * updates = 更新执行（检测在插件 host 半侧；壳侧另留一套兼容 0.1.x 旧插件
+ * 的检测端点）；seats = 持久原生 UI 贡献；notify = 短暂系统通知；
+ * overlays = 同源原生小窗；plugins = 插件清单。
  */
 export interface DshDesktop {
   updates: DshDesktopUpdates

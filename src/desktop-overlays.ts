@@ -6,6 +6,7 @@
 
 import { join } from 'node:path'
 import { BrowserWindow, ipcMain, screen, type WebContents } from 'electron'
+import { enforceRegularDockPolicy } from './dock-policy'
 import {
   DESKTOP_ID_RE,
   type DesktopOverlayBounds,
@@ -231,12 +232,15 @@ function applyIgnore(win: BrowserWindow, mode: DesktopOverlayIgnoreMouse | undef
 
 function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
   if (win.isDestroyed()) return
-  // B：普通浮动层。不要用 screen-saver、panel、showInactive、visibleOnFullScreen。
-  if (enabled && process.platform === 'darwin') {
-    win.setAlwaysOnTop(true, 'floating')
-    return
+  if (enabled) {
+    // 分层：普通浮动窗口即可。不要用 screen-saver / panel / fullscreen 变体——
+    // macOS 上 setVisibleOnAllWorkspaces(true) 会让 AppKit 把应用判为辅助应用，
+    // Dock 会删除应用的 tile（表现为「Dock 图标闪一下就没」，且不可恢复）。
+    if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'floating')
+    else win.setAlwaysOnTop(true)
+  } else {
+    win.setAlwaysOnTop(false)
   }
-  win.setAlwaysOnTop(enabled)
 }
 
 function applyChrome(win: BrowserWindow, chrome: DesktopOverlayChrome, initial: boolean): void {
@@ -311,6 +315,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       existing.win.show()
       if (reuseChrome.alwaysOnTop !== undefined) applyAlwaysOnTop(existing.win, reuseChrome.alwaysOnTop)
     }
+    enforceRegularDockPolicy()
     return infoOf(existing)
   }
 
@@ -354,6 +359,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   win.setMenuBarVisibility(false)
   win.setTitle('')
   win.setFocusable(false)
+  // alwaysOnTop 留到 show 之后再设：创建期设成浮层会让窗口在加载期间抢层级。
   applyChrome(win, { ...chrome, alwaysOnTop: undefined }, true)
 
   const row: OverlayRow = {
@@ -399,6 +405,8 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
   win.show()
   if (chrome.alwaysOnTop === true) applyAlwaysOnTop(win, true)
+  // 幂等守卫：overlay 打开后把被压掉的 Dock tile 拉回来。
+  enforceRegularDockPolicy()
   console.log(`[DSH-Desktop] overlay ${spec.contributor}/${spec.id} ${placed.width}x${placed.height}`)
   return infoOf(row)
 }

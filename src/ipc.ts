@@ -9,11 +9,22 @@
 
 export const Ipc = {
   updates: {
-    // 壳只执行，不检测：没有 getState / state / checkNow / setGate /
-    // setDshChannel / skipVersion 了——那些属于插件 host 半侧的检测器。
+    // 执行端点只有壳做得到，正式契约。
     appVersion: 'desktop:updates:app-version',
     downloadApp: 'desktop:updates:download-app',
     updateDsh: 'desktop:updates:update-dsh',
+    restartWeb: 'desktop:updates:restart-web',
+    // 热重启询问：主进程推给网页，网页用 DSH Modal 渲染后回 ack / 选择。
+    prompt: 'desktop:updates:prompt',
+    promptAck: 'desktop:updates:prompt-ack',
+    promptResponse: 'desktop:updates:prompt-response',
+    // 兼容层：仅 0.1.x 旧插件用，新插件的检测在插件 host 半侧。
+    getState: 'desktop:updates:get-state',
+    state: 'desktop:updates:state',
+    checkNow: 'desktop:updates:check-now',
+    setDshChannel: 'desktop:updates:set-dsh-channel',
+    skipVersion: 'desktop:updates:skip-version',
+    setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
