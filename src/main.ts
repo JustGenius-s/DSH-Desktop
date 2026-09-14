@@ -89,12 +89,16 @@ function createWindow(url: string, splash: BrowserWindow): BrowserWindow {
 
   setWindowRole(win, 'main')
   win.setMenuBarVisibility(false)
+  // 首启最大化（铺满工作区）：默认 bounds 仍作为最大化前的还原创备用。
+  win.maximize()
   win.once('ready-to-show', () => {
     refreshDesktopSeats()
     // 先显示并前置主窗口，再关 splash：全程保持至少一个可见窗口，避免出现
     // 「零可见窗口」空档，否则 macOS 会把前台还给 Finder / 上一个前台 App，
     // 主窗口就会显示在别的窗口后面。
     focusWindow(win)
+    // focusWindow 的 restore 只针对最小化；确保展示时保持最大化状态。
+    if (!win.isMaximized()) win.maximize()
     if (!splash.isDestroyed()) splash.close()
     // 主窗口站稳后再放行桌宠 overlay：启动瞬间建第二扇窗会撞
     // Electron 43 + macOS 26 的 SetRootCerts SIGSEGV。
