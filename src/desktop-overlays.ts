@@ -6,6 +6,7 @@
 
 import { join } from 'node:path'
 import { BrowserWindow, ipcMain, screen, type WebContents } from 'electron'
+import { enforceRegularDockPolicy } from './dock-policy'
 import {
   DESKTOP_ID_RE,
   type DesktopOverlayBounds,
@@ -322,8 +323,17 @@ function applyIgnore(win: BrowserWindow, mode: DesktopOverlayIgnoreMouse | undef
 
 function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
   if (win.isDestroyed()) return
-  // 不要用 screen-saver / floating / panel：打包版和 macOS 26 上会 SIGSEGV。
-  win.setAlwaysOnTop(enabled)
+  if (enabled) {
+    // 分层：普通浮动窗口即可。不要用 screen-saver / panel / pop-up-menu 变体——
+    // macOS 上 setVisibleOnAllWorkspaces(true) 会让 AppKit 把应用判为辅助应用，
+    // Dock 会删除应用的 tile（表现为「Dock 图标闪一下就没」，且不可恢复）。
+    // 注意 setAlwaysOnTop(true) 的默认 level 就是 'floating'，两者等价；
+    // 显式写出来只为让「不要抬高层级」这件事在代码里看得见。
+    if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'floating')
+    else win.setAlwaysOnTop(true)
+  } else {
+    win.setAlwaysOnTop(false)
+  }
 }
 
 function applyChrome(win: BrowserWindow, chrome: DesktopOverlayChrome, initial: boolean): void {
@@ -401,6 +411,7 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       existing.win.show()
       if (reuseChrome.alwaysOnTop !== undefined) applyAlwaysOnTop(existing.win, reuseChrome.alwaysOnTop)
     }
+    enforceRegularDockPolicy()
     return infoOf(existing)
   }
 
@@ -412,10 +423,23 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
       ? { x: spec.bounds.x, y: spec.bounds.y }
       : defaultPosition(width, height)
   const placed = clampRect(pos.x, pos.y, width, height)
+  // 预建窗固定为无框透明；frame / transparent 因此只影响运行期可改的属性。
+  const frame = chrome.frame === true
+  const transparent = chrome.transparent === true
 
+  // 复用启动时预建的隐藏窗：页面加载完再 new BrowserWindow 会撞
+  // Electron 43 + macOS 26 的 SetRootCerts SIGSEGV（见 prewarmOverlayWindow）。
   const win = adoptIdleOverlayWindow()
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
   win.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
+  // 预建窗按最保守的形态出生（透明 / 无框），open 时再按请求调整成最终形态。
+  // 这些属性在运行期可改，但必须在 show 之前改完，否则会看到一帧错形态。
+  win.setResizable(chrome.resizable === true)
+  win.setHasShadow(chrome.hasShadow === true)
+  win.setSkipTaskbar(chrome.skipTaskbar !== false && !frame ? true : chrome.skipTaskbar === true)
+  win.setHiddenInMissionControl(chrome.skipTaskbar === true || (!frame && chrome.skipTaskbar !== false))
+  win.setBackgroundColor(transparent ? '#00000000' : '#151517')
+  // alwaysOnTop 留到 show 之后再设：创建期设成浮层会让窗口在加载期间抢层级。
   applyChrome(win, { ...chrome, alwaysOnTop: undefined }, true)
 
   const row: OverlayRow = {
@@ -455,6 +479,8 @@ async function openOverlay(owner: WebContents, spec: DesktopOverlayOpenSpec): Pr
   if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
   win.show()
   if (chrome.alwaysOnTop === true) applyAlwaysOnTop(win, true)
+  // 幂等守卫：overlay 打开后把被压掉的 Dock tile 拉回来。
+  enforceRegularDockPolicy()
   console.log(`[DSH-Desktop] overlay ${spec.contributor}/${spec.id} ${placed.width}x${placed.height}`)
   return infoOf(row)
 }
