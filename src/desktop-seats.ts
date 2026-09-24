@@ -26,6 +26,9 @@ import {
 } from './api'
 import { restartDshWeb } from './dsh-lifecycle'
 import { Ipc } from './ipc'
+import { menuStrings, withAppName, type MenuStrings } from './menu-i18n'
+import { dshHome } from './runtime-manager'
+import { currentShellLang, type ShellLang } from './shell-locale'
 import { focusMainWindow, webContentsById } from './windows'
 
 export type {
@@ -71,6 +74,28 @@ const contributions: StoredContribution[] = []
 const watchedWc = new Set<number>()
 let tray: Tray | null = null
 let rebuildTimer: NodeJS.Timeout | null = null
+/**
+ * 壳菜单当前语言。来源是 web profile 里的 locale 偏好（用户设置、稳定契约）；
+ * 没有偏好（用户没选过）时回落系统语言。缓存到下一次配置变化。
+ */
+let menuLang: ShellLang | null = null
+
+/** 当前菜单语言：偏好优先，其次系统语言。 */
+function currentMenuLang(): ShellLang {
+  menuLang ??= currentShellLang(app.getLocale())
+  return menuLang
+}
+
+/**
+ * 重读语言偏好；真的变了才重建菜单（托盘一起）。
+ * 由 plugin-config-watch 在 cordis.patch.yml 变化时调用。
+ */
+export function refreshMenuLanguage(): void {
+  const next = currentShellLang(app.getLocale())
+  if (next === currentMenuLang()) return
+  menuLang = next
+  scheduleRebuild()
+}
 
 function trayIconPath(): string {
   return join(app.getAppPath(), 'build', 'icon.png')
@@ -211,26 +236,29 @@ function rebuildApplicationMenu(): void {
     return built.length === 0 ? [] : built
   })
   const pluginItems = groupedPluginItems(sorted('applicationMenu', 'plugins'))
+  // Electron 的 role 条目默认文案永远是英文（不做本地化，--lang=zh-CN 也不变），
+  // 所以每一个 role 都要显式带 label 才会跟着语言走。
+  const t = menuStrings(currentMenuLang())
   const template: MenuItemConstructorOptions[] = [
-    ownerAppMenu(appItems),
+    ownerAppMenu(appItems, t),
     {
-      label: 'Edit',
+      label: t.edit,
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        { role: 'undo', label: t.undo },
+        { role: 'redo', label: t.redo },
         { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
+        { role: 'cut', label: t.cut },
+        { role: 'copy', label: t.copy },
+        { role: 'paste', label: t.paste },
+        { role: 'selectAll', label: t.selectAll },
       ],
     },
     {
-      label: 'View',
+      label: t.view,
       submenu: [
-        { role: 'reload' },
+        { role: 'reload', label: t.reload },
         {
-          label: 'Restart DSH Service',
+          label: t.restartService,
           accelerator: 'CmdOrCtrl+Shift+R',
           click: () => {
             void restartDshWeb().catch((err: unknown) => {
@@ -238,24 +266,36 @@ function rebuildApplicationMenu(): void {
             })
           },
         },
-        { role: 'togglefullscreen' },
+        { role: 'togglefullscreen', label: t.toggleFullScreen },
         ...(app.isPackaged
           ? []
-          : ([{ type: 'separator' }, { role: 'toggleDevTools' }] as MenuItemConstructorOptions[])),
+          : ([
+              { type: 'separator' },
+              { role: 'toggleDevTools', label: t.toggleDevTools },
+            ] as MenuItemConstructorOptions[])),
       ],
     },
     {
-      label: 'Window',
+      label: t.window,
       role: 'windowMenu',
+      submenu: [
+        { role: 'minimize', label: t.minimize },
+        { role: 'zoom', label: t.zoom },
+        { type: 'separator' },
+        { role: 'front', label: t.bringAllToFront },
+      ],
     },
   ]
   if (pluginItems.length > 0) {
-    template.push({ label: 'Plugins', submenu: pluginItems })
+    template.push({ label: t.plugins, submenu: pluginItems })
   }
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-function ownerAppMenu(pluginItems: MenuItemConstructorOptions[]): MenuItemConstructorOptions {
+function ownerAppMenu(
+  pluginItems: MenuItemConstructorOptions[],
+  t: MenuStrings,
+): MenuItemConstructorOptions {
   const name = app.name || 'DSH-Desktop'
   const extra =
     pluginItems.length > 0 ? [...pluginItems, { type: 'separator' as const }] : []
@@ -263,20 +303,20 @@ function ownerAppMenu(pluginItems: MenuItemConstructorOptions[]): MenuItemConstr
     return {
       label: name,
       submenu: [
-        { role: 'about' },
+        { role: 'about', label: withAppName(t.about, name) },
         { type: 'separator' },
         ...extra,
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
+        { role: 'hide', label: withAppName(t.hide, name) },
+        { role: 'hideOthers', label: t.hideOthers },
+        { role: 'unhide', label: t.showAll },
         { type: 'separator' },
-        { role: 'quit' },
+        { role: 'quit', label: withAppName(t.quit, name) },
       ],
     }
   }
   return {
-    label: 'File',
-    submenu: [...extra, { role: 'quit' }],
+    label: t.file,
+    submenu: [...extra, { role: 'quit', label: t.exit }],
   }
 }
 
@@ -291,15 +331,17 @@ function rebuildTray(): void {
     return
   }
   const tooltip = rows.map((r) => r.tooltip).find((t) => t !== undefined) ?? 'DSH-Desktop'
+  const t = menuStrings(currentMenuLang())
+  const name = app.name || 'DSH-Desktop'
   const menu = Menu.buildFromTemplate([
     {
-      label: 'Show DSH-Desktop',
+      label: withAppName(t.trayShow, name),
       click: () => focusMainWindow(),
     },
     { type: 'separator' },
     ...pluginItems,
     { type: 'separator' },
-    { role: 'quit', label: 'Quit DSH-Desktop' },
+    { role: 'quit', label: withAppName(t.quit, name) },
   ])
   if (tray === null) {
     const iconFile = trayIconPath()

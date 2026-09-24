@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { app, ipcMain } from 'electron'
 import type { DesktopRestartChoice, DesktopRestartPrompt } from './api'
 import { Ipc } from './ipc'
+import { currentShellLang } from './shell-locale'
 import { focusMainWindow, getMainWindow } from './windows'
 
 export type RestartWebReason = 'plugin' | 'dsh-runtime'
@@ -68,8 +69,12 @@ const COPY: Record<RestartWebReason, { zh: { title: string; message: string; det
   },
 }
 
+/**
+ * 询问文案语言：与壳菜单同一个真源（用户偏好优先，其次系统语言），
+ * 不再单独看系统语言——否则中文界面上会冒出英文弹窗。
+ */
 function isZh(): boolean {
-  return app.getLocale().toLowerCase().startsWith('zh')
+  return currentShellLang(app.getLocale()) === 'zh'
 }
 
 const ACK_RETRY_MS = 400

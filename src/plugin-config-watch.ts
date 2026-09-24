@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { offerRestartDshWeb } from './dsh-lifecycle'
+import { refreshMenuLanguage } from './desktop-seats'
 import { dshHome } from './runtime-manager'
 
 const DEBOUNCE_MS = 600
@@ -55,6 +56,9 @@ function scheduleCheck(): void {
   if (debounceTimer !== null) clearTimeout(debounceTimer)
   debounceTimer = setTimeout(() => {
     debounceTimer = null
+    // 语言偏好就写在这批配置里，顺手让壳菜单跟着切——菜单不需要等热重启，
+    // 用户改了 Settings → Language 就能立刻看到顶栏换语言。
+    refreshMenuLanguage()
     void checkAndOffer()
   }, DEBOUNCE_MS)
   debounceTimer.unref?.()
