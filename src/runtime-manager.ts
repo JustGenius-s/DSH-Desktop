@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { app, session } from 'electron'
+import { compareVersions } from './app-updater'
 
 /** DSH home（与 CLI 约定一致：`$DSH_HOME` 或 `~/.dsh`）。 */
 export function dshHome(): string {
@@ -252,33 +253,22 @@ async function fetchDshDistTags(): Promise<Record<string, string> | undefined> {
   }
 }
 
-/** 判断一个字符串是否像 npm 包版本（不含 tag 语义）——用于 custom 渠道兜底校验。 */
-export function looksLikeVersion(input: string): boolean {
-  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(input.trim())
-}
-
 /**
- * 按更新渠道解析目标版本（壳侧兼容层用；新插件的检测在它自己的 host 半侧）：
- * - `latest` / `next` / `alpha`：读 npm 上同名 dist-tag；标签不存在返回 undefined。
- *   （`alpha` 是上游发 alpha 时专用的 tag，发 alpha 不会动 `latest`，
- *   所以必须显式支持这个渠道，否则 alpha 版本永远检测不到。）
- * - `custom`：`exact` 指定精确版本直接采用；否则按 channel 解析 dist-tag。
- * 全部失败返回 undefined（调用方静默吞掉，保持现状）。
+ * 全部 dist-tag 里版本最高的那个；失败返回 undefined。
+ *
+ * 不看单个渠道：上游发 alpha / rc 时不会动 `latest`，只看 latest 就永远看不到
+ * 更新的 next / alpha。这里把所有 tag 的版本都比一遍取最高（含 prerelease 规则，
+ * 否则 rc.6 与 rc.7 会被判相等）。
  */
-export async function resolveDshChannelVersion(
-  channel: 'latest' | 'next' | 'alpha' | 'custom',
-  exact?: string,
-): Promise<string | undefined> {
+export async function latestDshAcrossChannels(): Promise<string | undefined> {
   const tags = await fetchDshDistTags()
   if (tags === undefined) return undefined
-  if (channel === 'custom') {
-    const version = (exact ?? '').trim()
-    if (version !== '' && looksLikeVersion(version)) return version
-    return undefined
+  let best: string | undefined
+  for (const version of Object.values(tags)) {
+    if (version === '') continue
+    if (best === undefined || compareVersions(version, best) > 0) best = version
   }
-  const version = tags[channel]
-  if (typeof version !== 'string' || version === '') return undefined
-  return version
+  return best
 }
 
 /** 首次启动时安装最新版 `@deepseek-ai/dsh`（已装则跳过），返回 bin.js 路径。 */

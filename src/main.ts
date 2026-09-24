@@ -32,7 +32,6 @@ import { checkDesktopUpdates, setupDesktopBridge } from './desktop-bridge'
 import { installWebNotificationBridge, setupDesktopNotify, showTestBanner } from './desktop-notify'
 import { allowOverlays, closeAllOverlays, prewarmOverlayWindow, setupDesktopOverlays } from './desktop-overlays'
 import { refreshDesktopSeats, setupDesktopSeats } from './desktop-seats'
-import { installDesktopPlugin } from './plugin-installer'
 import { enforceRegularDockPolicy, startDockPolicyGuard, stopDockPolicyGuard } from './dock-policy'
 import { focusMainWindow, focusWindow, setWindowRole } from './windows'
 import { titleBarChromeCSS } from './titlebar-chrome'
@@ -562,20 +561,6 @@ app.whenReady().then(async () => {
     return
   }
 
-  // profile 已把插件写进 bundles 但 node_modules 链接缺失时，dsh 会在
-  // loadProfile 阶段直接抛错。必须在 startDsh 之前修链接；profile 尚未
-  // 初始化（首启）则安装脚本会跳过，等 host 就绪后再装一次。
-  setSplashStatus(splash, '正在检查桌面插件…')
-  // 安装脚本自己会写 profile 配置，暂停监听免得刚装完就弹「配置已变」。
-  {
-    const resume = pausePluginConfigWatch()
-    try {
-      await installDesktopPlugin()
-    } finally {
-      resume()
-    }
-  }
-
   // 单次启动：不自动隔离。失败时归因（仅用于高亮）并跳转自建插件管理页，
   // 由用户决定禁用哪些插件后重启。只有用户明确禁用才会改动 bundles。
   setSplashStatus(splash, '正在启动 DSH 服务…')
@@ -603,22 +588,8 @@ app.whenReady().then(async () => {
   mainWindow = createWindow(boot.launchUrl, splash)
   startPluginConfigWatch()
 
-  // 更新检测已移到 dsh-desktop-update 插件的 host 半侧（跑在 dsh web host
-  // 的 Node 进程里）。这里只把插件装齐，并把「执行」端点挂上；壳侧的兼容层
-  // 检测负责喂 0.1.x 旧插件的更新徽章（见 desktop-bridge.ts 顶部说明）。
-  // 安装不阻塞窗口出现，失败只记日志。
-  // 若这次才真正改了插件登记，走统一的「配置已变但未生效」弹窗——不强制。
-  void (async () => {
-    const resume = pausePluginConfigWatch()
-    let installed
-    try {
-      installed = await installDesktopPlugin()
-    } finally {
-      resume()
-    }
-    if (installed.restartNeeded) await notifyPluginConfigChanged()
-    await checkDesktopUpdates()
-  })()
+  // 启动后自动查一轮更新；不阻塞窗口出现，网络失败静默。
+  void checkDesktopUpdates()
 
   // 启动守卫会覆盖这段窗口期；再留一次显式断言兜底。
   setTimeout(() => enforceRegularDockPolicy(), 10_000)

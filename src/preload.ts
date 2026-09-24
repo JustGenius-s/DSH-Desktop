@@ -20,10 +20,7 @@ import type {
   DesktopRestartPrompt,
   DesktopSeatAction,
   DesktopSeatName,
-  DshChannel,
   DshDesktop,
-  DesktopUpdateKind,
-  DesktopUpdateState,
 } from './api'
 import type { Ipc as IpcShape } from './ipc'
 
@@ -42,12 +39,6 @@ const Ipc = {
     prompt: 'desktop:updates:prompt',
     promptAck: 'desktop:updates:prompt-ack',
     promptResponse: 'desktop:updates:prompt-response',
-    getState: 'desktop:updates:get-state',
-    state: 'desktop:updates:state',
-    checkNow: 'desktop:updates:check-now',
-    setDshChannel: 'desktop:updates:set-dsh-channel',
-    skipVersion: 'desktop:updates:skip-version',
-    setGate: 'desktop:updates:set-gate',
     relaunch: 'desktop:updates:relaunch',
   },
   seats: {
@@ -84,7 +75,7 @@ const api: DshDesktop = {
   updates: {
     // ---- 执行端点：正式契约 ----
     appVersion: (): Promise<string> => ipcRenderer.invoke(Ipc.updates.appVersion),
-    downloadApp: (url?: string): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp, url),
+    downloadApp: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.downloadApp),
     updateDsh: (version?: string): Promise<void> =>
       ipcRenderer.invoke(Ipc.updates.updateDsh, version),
     restartWeb: (): Promise<void> => ipcRenderer.invoke(Ipc.updates.restartWeb),
@@ -102,21 +93,6 @@ const api: DshDesktop = {
     respondPrompt: (id: string, choice: DesktopRestartChoice): void => {
       ipcRenderer.send(Ipc.updates.promptResponse, id, choice)
     },
-
-    // ---- 兼容层：仅 0.1.x 旧插件用；新插件的检测在插件 host 半侧 ----
-    getState: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.getState),
-    onState: (listener: (state: DesktopUpdateState) => void): (() => void) => {
-      const wrapped = (_event: unknown, state: DesktopUpdateState) => listener(state)
-      ipcRenderer.on(Ipc.updates.state, wrapped)
-      return () => ipcRenderer.removeListener(Ipc.updates.state, wrapped)
-    },
-    checkNow: (): Promise<DesktopUpdateState> => ipcRenderer.invoke(Ipc.updates.checkNow),
-    setDshChannel: (channel: DshChannel, version?: string): Promise<DesktopUpdateState> =>
-      ipcRenderer.invoke(Ipc.updates.setDshChannel, channel, version),
-    skipVersion: (kind: DesktopUpdateKind): Promise<void> =>
-      ipcRenderer.invoke(Ipc.updates.skipVersion, kind),
-    setGate: (kind: DesktopUpdateKind, enabled: boolean): Promise<DesktopUpdateState> =>
-      ipcRenderer.invoke(Ipc.updates.setGate, kind, enabled),
   },
   seats: {
     list: () => ipcRenderer.invoke(Ipc.seats.list),

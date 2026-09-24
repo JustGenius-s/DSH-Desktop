@@ -53,13 +53,6 @@
         ]
       },
       {
-        "from": "scripts",
-        "to": "scripts",
-        "filter": [
-          "install-desktop-plugin.mjs"
-        ]
-      },
-      {
         "from": "build/icon-mac.png",
         "to": "dock-icon.png"
       }

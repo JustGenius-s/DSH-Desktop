@@ -49,11 +49,22 @@ export interface MenuStrings {
   zoom: string
   bringAllToFront: string
   trayShow: string
-
+  /** 帮助菜单 + 其中的 DSH 运行时更新项。 */
+  help: string
+  updateDsh: string
   /** 检查桌面版更新（应用菜单项 / 关于弹窗按钮共用）。 */
+  checkUpdates: string
   /** 关于弹窗。 */
+  aboutTitle: string
+  aboutDetail: string
+  aboutClose: string
   /** 检查结果弹窗。 */
+  upToDate: string
+  updateAvailable: string
+  downloadLatest: string
   /** 结果弹窗里的 DSH 运行时说明行。 */
+  dshRuntime: string
+  dshNotInstalled: string
 }
 
 const ZH: MenuStrings = {
@@ -82,6 +93,17 @@ const ZH: MenuStrings = {
   zoom: '缩放',
   bringAllToFront: '前置全部窗口',
   trayShow: '显示 {name}',
+  help: '帮助',
+  updateDsh: '更新 DSH 运行时',
+  checkUpdates: '检查更新…',
+  aboutTitle: '关于 {name}',
+  aboutDetail: '{name} {version}',
+  aboutClose: '好',
+  upToDate: '已是最新版本（{version}）',
+  updateAvailable: '有可用更新：{update}',
+  downloadLatest: '下载并安装',
+  dshRuntime: 'DSH 运行时 {version}',
+  dshNotInstalled: 'DSH 运行时未安装',
 }
 
 const EN: MenuStrings = {
@@ -110,6 +132,17 @@ const EN: MenuStrings = {
   zoom: 'Zoom',
   bringAllToFront: 'Bring All to Front',
   trayShow: 'Show {name}',
+  help: 'Help',
+  updateDsh: 'Update DSH Runtime',
+  checkUpdates: 'Check for Updates…',
+  aboutTitle: 'About {name}',
+  aboutDetail: '{name} {version}',
+  aboutClose: 'OK',
+  upToDate: 'You are up to date ({version})',
+  updateAvailable: 'Update available: {update}',
+  downloadLatest: 'Download and Install',
+  dshRuntime: 'DSH runtime {version}',
+  dshNotInstalled: 'DSH runtime not installed',
 }
 
 /** 按语言取整套文案。 */

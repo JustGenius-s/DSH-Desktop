@@ -9,7 +9,9 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   app,
+  dialog,
   ipcMain,
+  shell,
   Menu,
   nativeImage,
   Tray,
@@ -28,6 +30,8 @@ import { restartDshWeb } from './dsh-lifecycle'
 import { Ipc } from './ipc'
 import { menuStrings, withAppName, type MenuStrings } from './menu-i18n'
 import { dshHome } from './runtime-manager'
+import { checkDesktopUpdates, RELEASES_FALLBACK, setMenuRefreshHook, updateDshRuntime } from './desktop-bridge'
+import { updateSummary } from './update-state'
 import { currentShellLang, type ShellLang } from './shell-locale'
 import { focusMainWindow, webContentsById } from './windows'
 
@@ -285,11 +289,68 @@ function rebuildApplicationMenu(): void {
         { role: 'front', label: t.bringAllToFront },
       ],
     },
+    helpMenu(t),
   ]
   if (pluginItems.length > 0) {
     template.push({ label: t.plugins, submenu: pluginItems })
   }
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+
+/** 帮助菜单：DSH 运行时更新。 */
+function helpMenu(t: MenuStrings): MenuItemConstructorOptions {
+  const s = updateSummary()
+  return {
+    role: 'help',
+    label: t.help,
+    submenu: [
+      { label: t.updateDsh, enabled: s.dshUpdate !== null, click: () => void updateDshRuntime() },
+    ],
+  }
+}
+
+/** 关于弹窗：显示版本，带一个「检查更新」按钮。 */
+export async function showAboutDialog(): Promise<void> {
+  const t = menuStrings(currentMenuLang())
+  const name = app.name || 'DSH-Desktop'
+  const s = updateSummary()
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    message: t.aboutTitle.replace('{name}', name),
+    detail: versionDetail(t, s),
+    buttons: [t.checkUpdates, t.aboutClose],
+    defaultId: 0,
+    cancelId: 1,
+  })
+  if (response === 0) await checkAndShowDialog()
+}
+
+/** 查一轮更新并弹结果：有更新给「下载并安装」，否则只说当前版本。 */
+export async function checkAndShowDialog(): Promise<void> {
+  const t = menuStrings(currentMenuLang())
+  await checkDesktopUpdates()
+  const s = updateSummary()
+  const hasUpdate = s.appUpdate !== null
+  const buttons = hasUpdate ? [t.downloadLatest, t.aboutClose] : [t.aboutClose]
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    message: hasUpdate ? t.updateAvailable.replace('{update}', s.appUpdate ?? '') : t.upToDate.replace('{version}', s.app),
+    detail: versionDetail(t, s),
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+  })
+  if (hasUpdate && response === 0) void shell.openExternal(RELEASES_FALLBACK)
+}
+
+/** 版本详情两行：桌面版 + DSH 运行时。 */
+function versionDetail(t: MenuStrings, s: ReturnType<typeof updateSummary>): string {
+  const name = app.name || 'DSH-Desktop'
+  return [
+    t.aboutDetail.replace('{name}', name).replace('{version}', s.app),
+    s.dsh === null ? t.dshNotInstalled : t.dshRuntime.replace('{version}', s.dsh),
+  ].join('\n')
 }
 
 function ownerAppMenu(
@@ -303,7 +364,8 @@ function ownerAppMenu(
     return {
       label: name,
       submenu: [
-        { role: 'about', label: withAppName(t.about, name) },
+        { label: withAppName(t.about, name), click: () => void showAboutDialog() },
+        { label: t.checkUpdates, accelerator: 'CmdOrCtrl+U', click: () => void checkAndShowDialog() },
         { type: 'separator' },
         ...extra,
         { role: 'hide', label: withAppName(t.hide, name) },
@@ -316,7 +378,13 @@ function ownerAppMenu(
   }
   return {
     label: t.file,
-    submenu: [...extra, { role: 'quit', label: t.exit }],
+    submenu: [
+      { label: withAppName(t.about, name), click: () => void showAboutDialog() },
+      { label: t.checkUpdates, accelerator: 'CmdOrCtrl+U', click: () => void checkAndShowDialog() },
+      { type: 'separator' },
+      ...extra,
+      { role: 'quit', label: t.exit },
+    ],
   }
 }
 
@@ -377,6 +445,9 @@ function watchSender(wc: WebContents): void {
 
 /** 声明席位、装 IPC、立刻渲染所有者自己的应用菜单。 */
 export function setupDesktopSeats(): void {
+  // 检测结果变了要重画菜单；用钩子注入，避免与 desktop-bridge 循环依赖。
+  setMenuRefreshHook(() => scheduleRebuild())
+
   ipcMain.handle(Ipc.seats.list, () => DECLARED_SEATS)
 
   ipcMain.handle(Ipc.seats.contribute, (event, raw: unknown) => {
