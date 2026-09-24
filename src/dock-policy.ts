@@ -8,7 +8,9 @@
  * dock.setIcon 仍用 PNG：Electron 43 的 createFromPath(icns) 可能返回 empty。
  * 不要 dock.hide()：hide 之后 show 会按 bundle icns 重建瓷砖，自定义 setIcon 会被冲掉。
  * 不要在 /Applications 留同 bundle id 的 .bak。
- * 改 icon-app.png 后跑 python3 scripts/build-mac-icon.py 再打包。
+ *
+ * build/icon-mac.png + build/icon.icns 已入库，直接用；换图标时手工保证
+ * 「1024 画布 / 856 内容」这组边距即可，仓库里不再维护生成脚本。
  */
 
 import { existsSync, readFileSync } from 'node:fs'
