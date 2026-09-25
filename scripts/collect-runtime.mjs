@@ -6,7 +6,15 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -54,7 +62,10 @@ async function fetchNode(version) {
   const ext = isWin ? 'zip' : 'tar.gz'
   const distId = `${nodeOs}-${arch}`
   const archive = join(target, `node.${ext}`)
-  writeFileSync(archive, await download(`https://nodejs.org/dist/${version}/node-${version}-${distId}.${ext}`))
+  writeFileSync(
+    archive,
+    await download(`https://nodejs.org/dist/${version}/node-${version}-${distId}.${ext}`),
+  )
   const extracted = join(target, `node-${version}-${distId}`)
   execFileSync('tar', ['-xf', archive, '-C', target])
   // Windows zip 把 node.exe 放在包根，tarball 放在 bin/。
@@ -65,7 +76,10 @@ async function fetchNode(version) {
 }
 
 async function fetchPnpm(version) {
-  await installTarball(`https://registry.npmjs.org/pnpm/-/pnpm-${version}.tgz`, join(target, 'pnpm'))
+  await installTarball(
+    `https://registry.npmjs.org/pnpm/-/pnpm-${version}.tgz`,
+    join(target, 'pnpm'),
+  )
 }
 
 /**
@@ -94,11 +108,17 @@ function resolvePnpmEntry() {
 /** 写 shim：dsh 内部 spawnSync('pnpm') 靠 PATH 找到它，shim 用内置 node 跑入口。 */
 function writePnpmShim(entry) {
   if (isWin) {
-    writeFileSync(join(binDir, 'pnpm.cmd'), `@"%~dp0${nodeName}" "%~dp0..\\pnpm\\bin\\${entry}" %*\r\n`)
+    writeFileSync(
+      join(binDir, 'pnpm.cmd'),
+      `@"%~dp0${nodeName}" "%~dp0..\\pnpm\\bin\\${entry}" %*\r\n`,
+    )
   } else {
-    writeFileSync(join(binDir, 'pnpm'), `#!/bin/sh
+    writeFileSync(
+      join(binDir, 'pnpm'),
+      `#!/bin/sh
 exec "$(dirname "$0")/${nodeName}" "$(dirname "$0")/../pnpm/bin/${entry}" "$@"
-`)
+`,
+    )
     chmodSync(join(binDir, 'pnpm'), 0o755)
   }
 }

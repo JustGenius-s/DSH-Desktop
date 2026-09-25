@@ -63,10 +63,13 @@ Tests (no Electron window or browser required):
 ```sh
 pnpm test          # vitest for test/*.test.ts + node --test for test/*.test.cjs
 pnpm typecheck
+pnpm check         # formatting + typecheck + build + all tests
 ```
 
 The TypeScript suites run under vitest; the `*.test.cjs` suites are plain
 `node:test` (see `vitest.config.ts`, which deliberately excludes them).
+The test command builds fresh output first. See [source organization](src/README.md)
+for module responsibilities, dependency rules, and Electron startup constraints.
 
 ## Package
 

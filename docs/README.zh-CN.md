@@ -61,7 +61,11 @@ pnpm start        # 首次启动会安装 @deepseek-ai/dsh（约 1-2 分钟）
 ```sh
 pnpm test          # test/*.test.ts 走 vitest，test/*.test.cjs 走 node --test
 pnpm typecheck
+pnpm check        # 格式检查 + 类型检查 + 构建 + 完整测试
 ```
+
+测试命令会先清理并编译产物。模块职责、依赖方向和 Electron 启动约束见
+[源码组织](../src/README.md)。
 
 ## 打包
 
@@ -86,9 +90,8 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 壳把 `window.dshDesktop` 注入到 DSH 网页（`updates` / `seats` / `notify` / `overlays`）。插件应依赖这份契约，而不是 Electron 打包代码。见 [desktop-api.md](desktop-api.md)。
 
 其中 `updates` 只做**执行**：壳负责报自己的版本、跑 `pnpm add` 装 DSH 运行时、打开下载页、重启。
-**更新检测不在壳里**——查 GitHub Releases 与 npm registry、比较版本、定时检查都由配套的
-dsh-desktop-update 插件在其 host 半侧完成（跑在 dsh web host 的 Node 进程里，无 CORS 限制，
-也不依赖窗口开着），再通过同源路由把结果提供给网页。
+更新检测与菜单展示由桌面壳完成：启动时查询 GitHub Releases 与 npm registry，
+之后每 6 小时检查一次。网页侧保留更新执行和服务重启的调用契约。
 
 ## 我们的插件
 

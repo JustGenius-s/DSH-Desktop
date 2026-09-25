@@ -4,7 +4,12 @@ const { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } = requir
 const { createServer } = require('node:net')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
-const { DSH_HOST, findFreePort, readWebPort, rememberWebPort } = require('../dist/web-port.js')
+const {
+  DSH_HOST,
+  findFreePort,
+  readWebPort,
+  rememberWebPort,
+} = require('../dist/main/runtime/web-port.js')
 
 function directory(t) {
   const path = mkdtempSync(join(tmpdir(), 'dsh-web-port-'))
@@ -18,7 +23,9 @@ test('cold boots reuse the port persisted by the previous successful host', asyn
   const first = await findFreePort()
   rememberWebPort(userData, first)
   assert.equal(await findFreePort(readWebPort(userData)), first)
-  assert.deepEqual(JSON.parse(readFileSync(join(userData, 'web-port.json'), 'utf8')), { port: first })
+  assert.deepEqual(JSON.parse(readFileSync(join(userData, 'web-port.json'), 'utf8')), {
+    port: first,
+  })
   assert.deepEqual(readdirSync(userData), ['web-port.json'])
 })
 
@@ -36,7 +43,16 @@ test('an occupied remembered port falls back without contacting its owner', asyn
 
 test('corrupt and invalid port records do not block startup', (t) => {
   const userData = directory(t)
-  for (const raw of ['{broken', 'null', '{}', '{"port":"49487"}', '{"port":0}', '{"port":80}', '{"port":65536}', '{"port":4096.5}']) {
+  for (const raw of [
+    '{broken',
+    'null',
+    '{}',
+    '{"port":"49487"}',
+    '{"port":0}',
+    '{"port":80}',
+    '{"port":65536}',
+    '{"port":4096.5}',
+  ]) {
     writeFileSync(join(userData, 'web-port.json'), raw)
     assert.equal(readWebPort(userData), undefined)
   }

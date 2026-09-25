@@ -5,7 +5,7 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const { FULLSCREEN_STRIP_INSET_PX, titleBarChromeCSS } = require('../dist/titlebar-chrome.js')
+const { FULLSCREEN_STRIP_INSET_PX, titleBarChromeCSS } = require('../dist/main/windows/titlebar.js')
 
 const mac = titleBarChromeCSS('darwin')
 const win = titleBarChromeCSS('win32')
@@ -45,10 +45,7 @@ test('strip 上的交互控件全部 no-drag', () => {
     "[role='button']",
     'input',
   ]) {
-    assert.ok(
-      mac.includes(`${strip} ${target}`),
-      `全屏 strip 下缺少 no-drag 目标：${target}`,
-    )
+    assert.ok(mac.includes(`${strip} ${target}`), `全屏 strip 下缺少 no-drag 目标：${target}`)
   }
   assert.ok(mac.includes(`[data-sidebar-right-panel='fullscreen'] [data-dockkit-divider]`))
 })
@@ -59,7 +56,7 @@ test('macOS 只给贴窗口左边缘的那条 strip 内缩，避让红绿灯', (
   // 它匹配所有 pane —— 曾经因此让分屏后的右 pane 也白吃 80px 内缩。
   // 必须把 pane 的【父级】也限定住：只有 pane 自己坐在 surface 里（未分屏）
   // 或 cell:first-child 里（分屏后的左 pane），它的左边缘才等于窗口左边缘。
-  const inset = body(mac, '[data-sidebar-right-panel=\'fullscreen\'] :is(')
+  const inset = body(mac, "[data-sidebar-right-panel='fullscreen'] :is(")
   assert.match(inset, /\[data-dockkit-surface\]/)
   assert.match(inset, /\[data-dockkit-cell\]:first-child/)
   assert.match(inset, />\s*\[data-dockkit-pane\]\s*>\s*\[data-dockkit-strip\]/)

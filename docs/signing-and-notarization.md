@@ -37,7 +37,7 @@ The electron-builder `mac` options in `package.json` are already set up:
   If no credentials are set it logs a warning and skips, so local ad-hoc builds still work.
 - On macOS 26, packaged launches can SIGSEGV in Node's `SecureContext::SetRootCerts`
   when a plugin opens an overlay and Node first reads the system keychain. The app
-  pins Node's bundled CAs at startup (`src/macos-node-ca.ts`) and holds overlay
+  pins Node's bundled CAs at startup (`src/main/platform/macos-node-ca.ts`) and holds overlay
   windows until the main window is showing. Uninstalling and reinstalling the same
   build does not fix this — rebuild after that change.
 

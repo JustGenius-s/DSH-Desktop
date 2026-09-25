@@ -2,7 +2,7 @@
 
 这是桌面壳注入到 DSH 网页的标准 API。插件只应依赖这里的形状；菜单、托盘、通知、overlay 窗口与更新的原生实现都在 Electron 主进程，与打包脚本分开。**更新检测与展示都在壳里**（启动自动查、之后每 6 小时一次），网页只能请求执行。
 
-源码真相：`src/api.ts`（类型）+ `src/preload.ts`（注入）+ `src/ipc.ts`（频道名，插件看不见）。
+源码真相：`src/shared/api.ts`（类型）+ `src/preload.ts`（注入）+ `src/shared/ipc.ts`（频道名，插件看不见）。
 
 普通浏览器没有 `window.dshDesktop`。检测方式：
 

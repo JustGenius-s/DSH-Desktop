@@ -9,7 +9,7 @@ import {
   parseLocalePreference,
   readLocalePreference,
   resolveShellLang,
-} from '../src/shell-locale'
+} from '../src/main/locale'
 
 /** 临时 DSH home；用例结束自动清理。 */
 function tempHome(): string {
@@ -85,7 +85,9 @@ test('the last locale entry wins (layered patches override)', () => {
 test('reads inline and quoted forms', () => {
   expect(parseLocalePreference('- id: locale\n  config: { preference: en }')).toBe('en')
   expect(parseLocalePreference('- id: locale\n  config:\n    preference: "zh-CN"')).toBe('zh-CN')
-  expect(parseLocalePreference("- id: locale\n  config:\n    preference: 'en' # picked by user")).toBe('en')
+  expect(
+    parseLocalePreference("- id: locale\n  config:\n    preference: 'en' # picked by user"),
+  ).toBe('en')
 })
 
 test('treats an absent or empty preference as unset', () => {
@@ -94,11 +96,15 @@ test('treats an absent or empty preference as unset', () => {
   expect(parseLocalePreference('- id: locale\n  config:\n    preference: null')).toBeUndefined()
   expect(parseLocalePreference('- id: locale\n  config: { }')).toBeUndefined()
   // config 之后的同级 key 不能把别的字段当成 preference。
-  expect(parseLocalePreference('- id: locale\n  name: x\n- id: other\n  config:\n    preference: zh')).toBeUndefined()
+  expect(
+    parseLocalePreference('- id: locale\n  name: x\n- id: other\n  config:\n    preference: zh'),
+  ).toBeUndefined()
 })
 
 test('a missing or unreadable document reads as unset', () => {
-  expect(readLocalePreference(join(tempHome(), 'profiles', 'web', 'cordis.patch.yml'))).toBeUndefined()
+  expect(
+    readLocalePreference(join(tempHome(), 'profiles', 'web', 'cordis.patch.yml')),
+  ).toBeUndefined()
   expect(readLocalePreference('/definitely/not/here')).toBeUndefined()
 })
 

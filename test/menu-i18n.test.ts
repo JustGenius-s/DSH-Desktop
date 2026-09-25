@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 
-import { menuStrings, withAppName } from '../src/menu-i18n'
-import { resolveShellLang, type ShellLang } from '../src/shell-locale'
+import { menuStrings, withAppName } from '../src/main/menus/i18n'
+import { resolveShellLang, type ShellLang } from '../src/main/locale'
 
 test('zh and en dictionaries carry identical key sets', () => {
   expect(Object.keys(menuStrings('zh')).sort()).toEqual(Object.keys(menuStrings('en')).sort())

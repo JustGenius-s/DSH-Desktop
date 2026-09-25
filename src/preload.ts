@@ -1,7 +1,7 @@
 /**
  * DSH-Desktop preload：以 contextBridge 向 DSH 网页暴露标准桌面 API。
  *
- * 契约见 `./api`（updates / seats / notify / overlays）。本文件只做 IPC 转发，
+ * 契约见 `./shared/api`（updates / seats / notify / overlays）。本文件只做 IPC 转发，
  * 不引入 Menu / Tray / Notification / BrowserWindow。普通浏览器没有 window.dshDesktop。
  */
 
@@ -21,14 +21,14 @@ import type {
   DesktopSeatAction,
   DesktopSeatName,
   DshDesktop,
-} from './api'
-import type { Ipc as IpcShape } from './ipc'
+} from './shared/api'
+import type { Ipc as IpcShape } from './shared/ipc'
 
 // 窗口 webPreferences 开了 sandbox:true，sandboxed preload 的 require 只认
-// electron 等极少数模块，require('./ipc') 会直接抛错、整个 preload 夭折，
+// electron 等极少数模块，require('./shared/ipc') 会直接抛错、整个 preload 夭折，
 // window.dshDesktop 永远注入不进来。因此频道常量必须内联在本文件里；
 // import type 编译后完全擦除（不产生 require），satisfies 把下面每个
-// 字面量值强绑定到 ./ipc.ts 的 as const 类型上——任一边改了一个字符，
+// 字面量值强绑定到 ./shared/ipc.ts 的 as const 类型上——任一边改了一个字符，
 // tsc 都会在这里报错，无需人工同步。
 const Ipc = {
   updates: {

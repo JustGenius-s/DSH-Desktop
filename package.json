@@ -7,9 +7,12 @@
   "main": "dist/main.js",
   "license": "MIT",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs",
+    "format": "prettier --write src test scripts package.json \"tsconfig*.json\" vitest.config.ts .prettierrc.json",
+    "format:check": "prettier --check src test scripts package.json \"tsconfig*.json\" vitest.config.ts .prettierrc.json",
+    "check": "npm run format:check && npm run typecheck && npm test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "vitest run && node --test test/*.test.cjs",
+    "test": "npm run build && vitest run && node --test test/*.test.cjs",
     "test:watch": "vitest",
     "collect": "node scripts/collect-runtime.mjs",
     "start": "npm run build && env NODE_OPTIONS=--no-use-system-ca electron .",
@@ -23,6 +26,7 @@
     "@types/node": "^22.0.0",
     "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
+    "prettier": "3.9.9",
     "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },
