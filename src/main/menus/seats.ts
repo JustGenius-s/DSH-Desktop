@@ -164,10 +164,9 @@ function groupedPluginItems(rows: StoredContribution[]): MenuItemConstructorOpti
 }
 
 function rebuildApplicationMenu(): void {
-  const appItems = sorted('applicationMenu', 'app').flatMap((row) => {
-    const built = toElectronItems(row, row.items)
-    return built.length === 0 ? [] : built
-  })
+  const appItems = sorted('applicationMenu', 'app').flatMap((row) =>
+    toElectronItems(row, row.items),
+  )
   const pluginItems = groupedPluginItems(sorted('applicationMenu', 'plugins'))
   // Electron 的 role 条目默认文案永远是英文（不做本地化，--lang=zh-CN 也不变），
   // 所以每一个 role 都要显式带 label 才会跟着语言走。
@@ -254,7 +253,7 @@ async function showAboutDialog(): Promise<void> {
   if (response === 0) await checkAndShowDialog()
 }
 
-/** 查一轮更新并弹结果：有更新给「下载并安装」，否则只说当前版本。 */
+/** 查一轮更新并弹结果；下载按钮打开发布页，不在这里安装。 */
 async function checkAndShowDialog(): Promise<void> {
   const t = menuStrings(currentMenuLang())
   await checkDesktopUpdates()

@@ -1,10 +1,8 @@
 /**
  * 网页服务热重启的协调入口：app.ts 提供实现，更新桥 / 菜单 / 插件 IPC 共用。
  *
- * 桌面壳（Electron）保持运行，只杀掉并拉起 `dsh web` 子进程，再让主窗口
- * 重新加载。插件配置、DSH 运行时升级都走这条路径，不再强制 `app.relaunch()`。
- *
- * 询问用 DSH 网页 Modal（由 desktop-update 插件渲染），不走系统原生 dialog。
+ * 重启 `dsh web` 后刷新主窗口，Electron 继续运行。
+ * 重启询问通过 IPC 交给网页订阅者渲染；没有订阅者时超时跳过。
  */
 
 import { app, ipcMain } from 'electron'
@@ -37,7 +35,7 @@ export async function restartDshWeb(): Promise<void> {
 
 type RestartPromptCopy = Omit<DesktopRestartPrompt, 'id' | 'reason'>
 
-const COPY: Record<DesktopRestartWebReason, Record<ShellLang, RestartPromptCopy>> = {
+const PROMPT_COPY: Record<DesktopRestartWebReason, Record<ShellLang, RestartPromptCopy>> = {
   plugin: {
     zh: {
       title: '插件配置已变更',
@@ -77,18 +75,18 @@ const COPY: Record<DesktopRestartWebReason, Record<ShellLang, RestartPromptCopy>
 }
 
 const ACK_RETRY_MS = 400
-const ACK_TRIES = 8
-const RESPOND_TIMEOUT_MS = 120_000
+const MAX_ACK_ATTEMPTS = 8
+const RESPONSE_TIMEOUT_MS = 120_000
 
 interface PendingPrompt {
   id: string
-  acked: boolean
+  acknowledged: boolean
   resolve: (choice: DesktopRestartChoice | 'dropped') => void
 }
 
 let pending: PendingPrompt | null = null
 let ipcReady = false
-let offerChain: Promise<unknown> = Promise.resolve()
+let offerChain: Promise<void> = Promise.resolve()
 
 function settlePending(id: string, choice: DesktopRestartChoice | 'dropped'): void {
   if (pending === null || pending.id !== id) return
@@ -103,7 +101,7 @@ export function setupRestartPromptIpc(): void {
   ipcReady = true
   ipcMain.on(Ipc.updates.promptAck, (_event, id: unknown) => {
     if (typeof id !== 'string' || pending === null || pending.id !== id) return
-    pending.acked = true
+    pending.acknowledged = true
   })
   ipcMain.on(Ipc.updates.promptResponse, (_event, id: unknown, choice: unknown) => {
     if (typeof id !== 'string') return
@@ -127,37 +125,42 @@ function sendPrompt(prompt: DesktopRestartPrompt): boolean {
 async function askRenderer(
   reason: DesktopRestartWebReason,
 ): Promise<DesktopRestartChoice | 'dropped'> {
-  const copy = COPY[reason][currentShellLang(app.getLocale())]
+  const copy = PROMPT_COPY[reason][currentShellLang(app.getLocale())]
   const prompt: DesktopRestartPrompt = {
     id: randomUUID(),
     reason,
     ...copy,
   }
 
-  return new Promise((resolve) => {
-    pending = { id: prompt.id, acked: false, resolve }
-    let tries = 0
-    const tick = (): void => {
-      if (pending === null || pending.id !== prompt.id) return
-      if (pending.acked) return
-      tries += 1
-      if (tries > ACK_TRIES) {
-        console.warn('[DSH-Desktop] restart prompt not acknowledged by page, skipping')
-        settlePending(prompt.id, 'dropped')
-        return
+  let retryTimer: NodeJS.Timeout | undefined
+  let responseTimer: NodeJS.Timeout | undefined
+  try {
+    return await new Promise((resolve) => {
+      pending = { id: prompt.id, acknowledged: false, resolve }
+      let attempts = 0
+      const sendOrRetry = (): void => {
+        if (pending === null || pending.id !== prompt.id || pending.acknowledged) return
+        if (attempts === MAX_ACK_ATTEMPTS) {
+          console.warn('[DSH-Desktop] restart prompt not acknowledged by page, skipping')
+          settlePending(prompt.id, 'dropped')
+          return
+        }
+        attempts += 1
+        if (!sendPrompt(prompt) && attempts === MAX_ACK_ATTEMPTS) {
+          settlePending(prompt.id, 'dropped')
+          return
+        }
+        retryTimer = setTimeout(sendOrRetry, ACK_RETRY_MS)
+        retryTimer.unref()
       }
-      if (!sendPrompt(prompt)) {
-        if (tries >= ACK_TRIES) settlePending(prompt.id, 'dropped')
-        else setTimeout(tick, ACK_RETRY_MS).unref?.()
-        return
-      }
-      setTimeout(tick, ACK_RETRY_MS).unref?.()
-    }
-    tick()
-    setTimeout(() => {
-      settlePending(prompt.id, 'dropped')
-    }, RESPOND_TIMEOUT_MS).unref?.()
-  })
+      responseTimer = setTimeout(() => settlePending(prompt.id, 'dropped'), RESPONSE_TIMEOUT_MS)
+      responseTimer.unref()
+      sendOrRetry()
+    })
+  } finally {
+    clearTimeout(retryTimer)
+    clearTimeout(responseTimer)
+  }
 }
 
 /**
@@ -166,10 +169,7 @@ async function askRenderer(
  * 询问交给网页里的 DSH Modal；页面没接住则当作稍后。
  */
 export async function offerRestartDshWeb(reason: DesktopRestartWebReason): Promise<boolean> {
-  const run = offerChain.then(
-    () => offerRestartDshWebImpl(reason),
-    () => offerRestartDshWebImpl(reason),
-  )
+  const run = offerChain.then(() => offerRestartDshWebImpl(reason))
   offerChain = run.then(
     () => undefined,
     () => undefined,

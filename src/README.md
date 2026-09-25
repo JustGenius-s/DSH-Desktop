@@ -63,6 +63,8 @@ src/
 
 ```sh
 pnpm build       # 清理 dist 后编译，移除搬迁/删除文件留下的旧产物
+pnpm start       # 编译后启动 Electron，支持 macOS、Windows 和 Linux
+pnpm dev         # start 的别名；通过 -- 继续传递 Electron 参数
 pnpm typecheck   # 源码及 TypeScript 测试的类型检查
 pnpm test        # 自动构建，再运行 Vitest 与 node:test
 pnpm format     # 按统一规则格式化源码、测试和构建脚本
@@ -78,8 +80,14 @@ pnpm check      # 格式检查、类型检查、构建及完整测试
   的目标行宽。提交前运行 `pnpm check`；格式检查也可单独用 `pnpm format:check`。
 - TypeScript 持续检查未使用变量/参数、遗漏返回值和 switch 意外穿透。
   只有跨模块调用、诊断或独立测试需要的函数才导出；类型导入使用 `type` 修饰。
+- 变量与函数用 camelCase，类型用 PascalCase，常量用 UPPER_SNAKE_CASE。
+  `is` / `has` / `can` 前缀用于布尔判断；返回对象的查找函数用 `find` / `get`。
+  文件路径、计时器等跨多行使用的变量用完整含义命名。
 - 共用实际重复的流程，例如 npm 渠道查询、Cookie 清理和重启文案类型。
   单次调用的简单表达式直接写在使用处；涉及平台兼容的分支保留说明。
+- 注释解释约束、兼容原因和失败处理，并与当前实现一致；删除过时流程和重复叙述。
+- 命令通过参数数组启动子进程，不拼接 shell 命令。开发启动统一使用
+  `scripts/start.mjs`，保留现有 `NODE_OPTIONS` 并追加 TLS 兼容选项。
 - 异步操作在第一次 `await` 前设置并发保护；定时器、监听器在成功与超时路径都清理。
   IPC 初始化通过明确的注册状态保持幂等，不用普通事件监听数量推断 invoke 处理器。
 - 修改行为时增加对应回归测试。沙箱 preload 的必要内联代码保留，并通过类型和测试

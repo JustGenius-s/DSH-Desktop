@@ -12,12 +12,8 @@ import { dshHome } from '../runtime/paths'
 
 const DEBOUNCE_MS = 600
 
-/** 影响 web 插件加载的配置文件（相对 DSH home）。 */
-const WATCHED_RELATIVE = [
-  join('profiles', 'web', 'package.json'),
-  join('profiles', 'web', 'cordis.patch.yml'),
-  join('profiles', 'web', 'cordis.yml'),
-] as const
+/** web profile 中影响插件加载的配置文件。 */
+const WATCHED_FILES = new Set(['package.json', 'cordis.patch.yml', 'cordis.yml'])
 
 let watchers: FSWatcher[] = []
 let debounceTimer: NodeJS.Timeout | null = null
@@ -36,8 +32,8 @@ function profileWebDir(): string {
 }
 
 function watchedPaths(): string[] {
-  const home = dshHome()
-  return WATCHED_RELATIVE.map((rel) => join(home, rel))
+  const profileDir = profileWebDir()
+  return [...WATCHED_FILES].map((name) => join(profileDir, name))
 }
 
 /** 读配置指纹；文件缺失当空串。 */
@@ -62,7 +58,7 @@ function scheduleCheck(): void {
     onConfigChanged()
     void checkAndOffer()
   }, DEBOUNCE_MS)
-  debounceTimer.unref?.()
+  debounceTimer.unref()
 }
 
 async function checkAndOffer(): Promise<void> {
@@ -110,14 +106,14 @@ export function pausePluginConfigWatch(): () => void {
 function attachWatcher(path: string): void {
   try {
     if (!existsSync(path)) return
-    const w = watch(path, { persistent: false }, () => {
+    const watcher = watch(path, { persistent: false }, () => {
       if (paused > 0) return
       scheduleCheck()
     })
-    w.on('error', () => {
+    watcher.on('error', () => {
       // 文件被删重建时 watch 可能报错；下次 start 会重挂。
     })
-    watchers.push(w)
+    watchers.push(watcher)
   } catch {
     // 文件尚不存在等：跳过。
   }
@@ -134,22 +130,17 @@ export function startPluginConfigWatch(onChange: () => void): void {
   try {
     const dir = profileWebDir()
     if (existsSync(dir)) {
-      const w = watch(dir, { persistent: false }, (_event, filename) => {
+      const watcher = watch(dir, { persistent: false }, (_event, filename) => {
         if (paused > 0) return
-        const name = filename === null || filename === undefined ? '' : String(filename)
-        if (
-          name === 'package.json' ||
-          name === 'cordis.patch.yml' ||
-          name === 'cordis.yml' ||
-          name === ''
-        ) {
+        const name = filename?.toString() ?? ''
+        if (name === '' || WATCHED_FILES.has(name)) {
           scheduleCheck()
         }
       })
-      watchers.push(w)
+      watchers.push(watcher)
     }
   } catch {
-    // ignore
+    // 目录暂不可读时，仍尝试监听各个已有文件。
   }
 
   for (const path of watchedPaths()) attachWatcher(path)
@@ -161,11 +152,11 @@ export function stopPluginConfigWatch(): void {
     clearTimeout(debounceTimer)
     debounceTimer = null
   }
-  for (const w of watchers) {
+  for (const watcher of watchers) {
     try {
-      w.close()
+      watcher.close()
     } catch {
-      // ignore
+      // watcher 已关闭时无需重试。
     }
   }
   watchers = []

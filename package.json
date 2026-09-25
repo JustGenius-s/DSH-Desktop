@@ -15,8 +15,8 @@
     "test": "npm run build && vitest run && node --test test/*.test.cjs",
     "test:watch": "vitest",
     "collect": "node scripts/collect-runtime.mjs",
-    "start": "npm run build && env NODE_OPTIONS=--no-use-system-ca electron .",
-    "dev": "npm run build && env NODE_OPTIONS=--no-use-system-ca electron .",
+    "start": "npm run build && node scripts/start.mjs",
+    "dev": "npm run start --",
     "pack": "npm run build && electron-builder --dir",
     "dist:mac": "npm run build && npm run collect && electron-builder --mac",
     "dist:win": "npm run build && npm run collect && electron-builder --win"

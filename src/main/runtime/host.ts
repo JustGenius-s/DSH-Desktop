@@ -36,7 +36,7 @@ const RAISED_HTTP_HEADER_SIZE = '--max-http-header-size=65536'
 /** 给 dsh 子进程抬高 HTTP 头上限，且不覆盖调用方已设置的同名 flag。 */
 export function withRaisedHttpHeaderLimit(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const current = env.NODE_OPTIONS ?? ''
-  if (/(?:^|\s)--max-http-header-size=/.test(current)) return env
+  if (/(?:^|\s)--max-http-header-size(?:=|\s|$)/.test(current)) return env
   return {
     ...env,
     NODE_OPTIONS:

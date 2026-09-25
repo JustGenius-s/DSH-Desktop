@@ -26,7 +26,7 @@ export function closeBanner(key: string): void {
   if (!win.isDestroyed()) win.close()
 }
 
-/** 壳内横幅：不依赖 macOS 通知授权。系统 Notification 在这台机器上会静默失败。 */
+/** 壳内横幅：在系统通知未展示时仍提供可点击的提示。 */
 export function showBannerOverlay(wc: WebContents, spec: DesktopNotifySpec): void {
   const key = bannerKey(wc.id, spec.contributor, spec.id)
   closeBanner(key)

@@ -114,16 +114,19 @@ export async function ensureDshInstalled(onStatus?: (message: string) => void): 
   onStatus?.(`正在安装 DSH 运行时 ${version}…（首次约需 1-2 分钟）`)
   const dir = runtimeDir()
   mkdirSync(dir, { recursive: true })
-  const pj = join(dir, 'package.json')
-  if (!existsSync(pj)) {
-    writeFileSync(pj, JSON.stringify({ name: 'dsh-runtime', private: true }, null, 2) + '\n')
+  const packagePath = join(dir, 'package.json')
+  if (!existsSync(packagePath)) {
+    writeFileSync(
+      packagePath,
+      JSON.stringify({ name: 'dsh-runtime', private: true }, null, 2) + '\n',
+    )
   }
 
   await runPnpm(installDshArgs(dir, version))
 
-  const after = installedDshBin()
-  if (after === undefined) throw new Error('安装完成但未找到 @deepseek-ai/dsh 的 bin.js')
-  return after
+  const installedBin = installedDshBin()
+  if (installedBin === undefined) throw new Error('安装完成但未找到 @deepseek-ai/dsh 的 bin.js')
+  return installedBin
 }
 
 /** 升级到调用方指定的版本；版本选择由 updates/bridge.ts 负责。 */
@@ -133,5 +136,5 @@ export async function updateDsh(
 ): Promise<void> {
   onStatus?.(`正在通过 pnpm 安装 @deepseek-ai/dsh@${version}…（约需 1–2 分钟）`)
   await runPnpm(installDshArgs(runtimeDir(), version))
-  onStatus?.('安装完成，正在校验…')
+  onStatus?.('安装完成')
 }

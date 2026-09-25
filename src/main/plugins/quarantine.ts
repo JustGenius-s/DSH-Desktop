@@ -1,6 +1,6 @@
 /**
  * 插件故障归因与启用状态管理。启动失败只提供疑似插件，由用户在恢复页
- * 决定启用/禁用；桌面自带插件的禁用选择记入 quarantined-plugins.json。
+ * 决定启用/禁用；旧版桌面内置插件的选择仍记入 quarantined-plugins.json。
  *
  * 核心 bundle 不允许禁用。无法归因时返回空列表，恢复页仍展示原始错误。
  */
@@ -19,7 +19,7 @@ interface QuarantineRecord {
   errorSummary: string
 }
 
-function profilePkgPath(): string {
+function profilePackagePath(): string {
   return join(dshHome(), 'profiles', 'web', 'package.json')
 }
 
@@ -30,7 +30,7 @@ function quarantineFilePath(): string {
 /** 当前 web profile 登记的 bundle 列表；读不到返回空数组。 */
 export function getProfileBundles(): string[] {
   try {
-    const pkg = JSON.parse(readFileSync(profilePkgPath(), 'utf8'))
+    const pkg = JSON.parse(readFileSync(profilePackagePath(), 'utf8'))
     const bundles = pkg.dsh?.profile?.bundles
     return Array.isArray(bundles) ? bundles.filter((b: unknown) => typeof b === 'string') : []
   } catch {
@@ -45,10 +45,10 @@ export function getProfileBundles(): string[] {
  */
 function bundleRealDirs(bundles: string[]): Map<string, string> {
   const dirs = new Map<string, string>()
-  const nm = join(dshHome(), 'profiles', 'web', 'node_modules')
+  const nodeModulesDir = join(dshHome(), 'profiles', 'web', 'node_modules')
   for (const name of bundles) {
     try {
-      dirs.set(name, realpathSync(join(nm, ...name.split('/'))))
+      dirs.set(name, realpathSync(join(nodeModulesDir, ...name.split('/'))))
     } catch {
       // 链接缺失时该插件只剩名字匹配可用。
     }
@@ -151,15 +151,14 @@ export function clearQuarantine(): void {
 /**
  * 启用/禁用一个 bundle：启用时追加到 bundles 末尾（依赖里的 link: 条目保留，
  * 便于恢复时无需重建链接），禁用时从 bundles 摘除。核心 bundle 拒绝。
- * 桌面端自带插件（DESKTOP_OWNED）禁用时额外落一条隔离记录——安装脚本
- * （plugin-installer）靠它识别「用户已禁用」，否则下次启动会重新登记回来。
- * @returns 是否实际写入了配置。
+ * 同步旧版桌面内置插件的隔离记录，保留已有恢复数据的兼容性。
+ * 已处于目标状态时也返回 ok，不重复写入 profile。
  */
 export function setBundleEnabled(name: string, enabled: boolean): { ok: boolean; error?: string } {
   if (CORE_BUNDLES.has(name)) return { ok: false, error: `核心插件 ${name} 不可禁用` }
   try {
-    const pkgPath = profilePkgPath()
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+    const packagePath = profilePackagePath()
+    const pkg = JSON.parse(readFileSync(packagePath, 'utf8'))
     pkg.dsh ??= {}
     pkg.dsh.profile ??= {}
     const bundles: unknown[] = Array.isArray(pkg.dsh.profile.bundles) ? pkg.dsh.profile.bundles : []
@@ -170,11 +169,11 @@ export function setBundleEnabled(name: string, enabled: boolean): { ok: boolean;
     } else if (!enabled && present) {
       pkg.dsh.profile.bundles = names.filter((b) => b !== name)
     } else {
-      syncDisabledMark(name, enabled)
+      syncLegacyDisabledRecord(name, enabled)
       return { ok: true } // 已是目标状态，无写入。
     }
-    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
-    syncDisabledMark(name, enabled)
+    writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n')
+    syncLegacyDisabledRecord(name, enabled)
     return { ok: true }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
@@ -183,12 +182,12 @@ export function setBundleEnabled(name: string, enabled: boolean): { ok: boolean;
   }
 }
 
-/** 桌面端自带插件（在 bundles 之外也登记了 link: 依赖）的目录清单。 */
-const DESKTOP_OWNED = new Set(['@just-genius/dsh-desktop-update'])
+/** 旧版曾内置的 bundle；保留恢复入口，当前更新功能已由主进程提供。 */
+const LEGACY_DESKTOP_BUNDLES = new Set(['@just-genius/dsh-desktop-update'])
 
-/** 桌面端自带插件禁用时落/清隔离记录，让安装脚本不再自动重新登记。 */
-function syncDisabledMark(name: string, enabled: boolean): void {
-  if (!DESKTOP_OWNED.has(name)) return
+/** 同步旧版桌面内置插件的禁用记录。 */
+function syncLegacyDisabledRecord(name: string, enabled: boolean): void {
+  if (!LEGACY_DESKTOP_BUNDLES.has(name)) return
   const records = readQuarantine().filter((r) => r.name !== name)
   if (!enabled) {
     records.push({
@@ -201,7 +200,7 @@ function syncDisabledMark(name: string, enabled: boolean): void {
 }
 
 /**
- * 插件清单视图：bundles 里的是启用态；桌面端自带插件即使不在 bundles 里
+ * 插件清单视图：bundles 里的是启用态；旧版桌面插件即使不在 bundles 里
  * 也列出（禁用态），让用户能重新启用。核心 bundle 恒在列表并锁定。
  */
 export function listPlugins(): {
@@ -211,11 +210,11 @@ export function listPlugins(): {
   desktopOwned: boolean
 }[] {
   const bundles = getProfileBundles()
-  const names = new Set<string>([...CORE_BUNDLES, ...bundles, ...DESKTOP_OWNED])
+  const names = new Set<string>([...CORE_BUNDLES, ...bundles, ...LEGACY_DESKTOP_BUNDLES])
   return [...names].map((name) => ({
     name,
     enabled: bundles.includes(name),
     core: CORE_BUNDLES.has(name),
-    desktopOwned: DESKTOP_OWNED.has(name),
+    desktopOwned: LEGACY_DESKTOP_BUNDLES.has(name),
   }))
 }

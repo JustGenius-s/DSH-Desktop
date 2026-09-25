@@ -47,7 +47,7 @@ async function installTarball(url, dest) {
   renameSync(join(target, 'package'), dest)
 }
 
-/** nodejs.org 的 index.json 已按新→旧排序，首个即最新稳定版。 */
+/** nodejs.org 的 index.json 按发布顺序倒序排列，取首个版本，不限定 LTS。 */
 async function latestNodeVersion() {
   const list = JSON.parse(await (await fetch('https://nodejs.org/dist/index.json')).text())
   return list[0].version

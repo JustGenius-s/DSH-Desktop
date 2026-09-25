@@ -60,22 +60,31 @@ function watchOwner(wc: WebContents): void {
   })
 }
 
-function isOverlaySender(wc: WebContents): OverlayRow | undefined {
+function findSenderOverlay(wc: WebContents): OverlayRow | undefined {
   return overlays.find((row) => !row.win.isDestroyed() && row.win.webContents.id === wc.id)
 }
 
 function resolveOverlay(sender: WebContents, id: string): OverlayRow | undefined {
-  const self = isOverlaySender(sender)
+  const self = findSenderOverlay(sender)
   if (self !== undefined) return self.id === id ? self : undefined
   return overlays.find((row) => row.ownerWcId === sender.id && row.id === id)
 }
 
+/** 更新类操作严格校验 id 与所有权；close 单独保持幂等。 */
+function requireOverlay(sender: WebContents, id: unknown): OverlayRow {
+  if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id)) {
+    throw new Error('invalid desktop overlay')
+  }
+  const row = resolveOverlay(sender, id)
+  if (row === undefined) throw new Error('desktop overlay not found')
+  return row
+}
+
 function infoOf(row: OverlayRow): DesktopOverlayInfo {
-  const b = row.win.getBounds()
   return {
     contributor: row.contributor,
     id: row.id,
-    bounds: { x: b.x, y: b.y, width: b.width, height: b.height },
+    bounds: row.win.getBounds(),
   }
 }
 
@@ -89,7 +98,7 @@ function recycleOverlayWindow(win: BrowserWindow): void {
   if (win.isDestroyed()) return
   win.hide()
   applyAlwaysOnTop(win, false)
-  applyIgnore(win, 'none')
+  applyIgnoreMouseEvents(win, 'none')
   void win.loadURL('about:blank').catch(() => {})
   if (idleOverlay === null || idleOverlay.isDestroyed()) idleOverlay = win
   else win.close()
@@ -112,9 +121,7 @@ function closeOwned(ownerWcId: number, notify: boolean): void {
 }
 
 export function closeAllOverlays(): void {
-  for (const row of [...overlays]) {
-    const idx = overlays.indexOf(row)
-    if (idx >= 0) overlays.splice(idx, 1)
+  for (const row of overlays.splice(0)) {
     if (!row.win.isDestroyed()) {
       row.win.removeAllListeners('closed')
       row.win.close()
@@ -179,17 +186,13 @@ function adoptIdleOverlayWindow(): BrowserWindow {
   return createOverlayBrowserWindow()
 }
 
-function workAreaFor(x: number, y: number, width: number, height: number): Electron.Rectangle {
-  return screen.getDisplayMatching({ x, y, width, height }).workArea
-}
-
 function clampRect(
   x: number,
   y: number,
   width: number,
   height: number,
 ): DesktopOverlayRect & { hitEdge: boolean } {
-  const area = workAreaFor(x, y, width, height)
+  const area = screen.getDisplayMatching({ x, y, width, height }).workArea
   const maxX = area.x + Math.max(0, area.width - width)
   const maxY = area.y + Math.max(0, area.height - height)
   const nx = Math.min(maxX, Math.max(area.x, x))
@@ -205,7 +208,7 @@ function defaultPosition(width: number, height: number): { x: number; y: number 
   }
 }
 
-function applyIgnore(win: BrowserWindow, mode: DesktopOverlayIgnoreMouse | undefined): void {
+function applyIgnoreMouseEvents(win: BrowserWindow, mode: DesktopOverlayIgnoreMouse): void {
   if (mode === 'all') win.setIgnoreMouseEvents(true)
   else if (mode === 'forward') win.setIgnoreMouseEvents(true, { forward: true })
   else win.setIgnoreMouseEvents(false)
@@ -232,8 +235,8 @@ function applyChrome(win: BrowserWindow, chrome: DesktopOverlayChrome, initial: 
   if (chrome.skipTaskbar !== undefined) win.setSkipTaskbar(chrome.skipTaskbar)
   if (chrome.resizable !== undefined) win.setResizable(chrome.resizable)
   if (chrome.hasShadow !== undefined) win.setHasShadow(chrome.hasShadow)
-  if (chrome.ignoreMouseEvents !== undefined) applyIgnore(win, chrome.ignoreMouseEvents)
-  else if (initial) applyIgnore(win, 'none')
+  if (chrome.ignoreMouseEvents !== undefined) applyIgnoreMouseEvents(win, chrome.ignoreMouseEvents)
+  else if (initial) applyIgnoreMouseEvents(win, 'none')
 }
 
 function isAllowedOverlayUrl(url: string): boolean {
@@ -264,7 +267,6 @@ async function loadOverlayUrl(win: BrowserWindow, url: string): Promise<void> {
   if (win.isDestroyed()) return
   try {
     await win.loadURL(url)
-    return
   } catch (err) {
     // Closing a still-loading overlay (replace / settings remount) aborts
     // Chromium, or throws TypeError once the BrowserWindow is already gone.
@@ -325,6 +327,7 @@ async function openOverlay(
   // 预建窗固定为无框透明；frame / transparent 因此只影响运行期可改的属性。
   const frame = chrome.frame === true
   const transparent = chrome.transparent === true
+  const skipTaskbar = chrome.skipTaskbar ?? !frame
 
   // 复用启动时预建的隐藏窗：页面加载完再 new BrowserWindow 会撞
   // Electron 43 + macOS 26 的 SetRootCerts SIGSEGV（见 prewarmOverlayWindow）。
@@ -335,10 +338,8 @@ async function openOverlay(
   // 这些属性在运行期可改，但必须在 show 之前改完，否则会看到一帧错形态。
   win.setResizable(chrome.resizable === true)
   win.setHasShadow(chrome.hasShadow === true)
-  win.setSkipTaskbar(chrome.skipTaskbar !== false && !frame ? true : chrome.skipTaskbar === true)
-  win.setHiddenInMissionControl(
-    chrome.skipTaskbar === true || (!frame && chrome.skipTaskbar !== false),
-  )
+  win.setSkipTaskbar(skipTaskbar)
+  win.setHiddenInMissionControl(skipTaskbar)
   win.setBackgroundColor(transparent ? '#00000000' : '#151517')
   // alwaysOnTop 留到 show 之后再设：创建期设成浮层会让窗口在加载期间抢层级。
   applyChrome(win, { ...chrome, alwaysOnTop: undefined }, true)
@@ -436,7 +437,7 @@ function updateOverlay(row: OverlayRow, raw: unknown): DesktopOverlayInfo {
 }
 
 function listFor(sender: WebContents): DesktopOverlayInfo[] {
-  const self = isOverlaySender(sender)
+  const self = findSenderOverlay(sender)
   if (self !== undefined) return [infoOf(self)]
   return overlays.filter((row) => row.ownerWcId === sender.id && !row.win.isDestroyed()).map(infoOf)
 }
@@ -448,7 +449,7 @@ export function setupDesktopOverlays(origin: () => string | null): void {
   overlayWaiters.length = 0
 
   ipcMain.handle(Ipc.overlays.open, async (event, raw: unknown): Promise<DesktopOverlayInfo> => {
-    if (isOverlaySender(event.sender) !== undefined)
+    if (findSenderOverlay(event.sender) !== undefined)
       throw new Error('overlay cannot open another overlay')
     const spec = sanitizeOpen(raw, getOrigin())
     if (spec === null) {
@@ -460,20 +461,14 @@ export function setupDesktopOverlays(origin: () => string | null): void {
   })
 
   ipcMain.handle(Ipc.overlays.update, (event, id: unknown, raw: unknown): DesktopOverlayInfo => {
-    if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id))
-      throw new Error('invalid desktop overlay')
-    const row = resolveOverlay(event.sender, id)
-    if (row === undefined) throw new Error('desktop overlay not found')
+    const row = requireOverlay(event.sender, id)
     return updateOverlay(row, raw)
   })
 
   ipcMain.handle(
     Ipc.overlays.move,
     (event, id: unknown, raw: unknown): DesktopOverlayMoveResult => {
-      if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id))
-        throw new Error('invalid desktop overlay')
-      const row = resolveOverlay(event.sender, id)
-      if (row === undefined) throw new Error('desktop overlay not found')
+      const row = requireOverlay(event.sender, id)
       return moveOverlay(row, raw)
     },
   )
@@ -481,11 +476,8 @@ export function setupDesktopOverlays(origin: () => string | null): void {
   ipcMain.handle(
     Ipc.overlays.setIgnoreMouseEvents,
     (event, id: unknown, ignore: unknown, opts: unknown): void => {
-      if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id))
-        throw new Error('invalid desktop overlay')
       if (typeof ignore !== 'boolean') throw new Error('invalid desktop overlay')
-      const row = resolveOverlay(event.sender, id)
-      if (row === undefined) throw new Error('desktop overlay not found')
+      const row = requireOverlay(event.sender, id)
       const forward =
         opts !== null &&
         typeof opts === 'object' &&
@@ -495,10 +487,7 @@ export function setupDesktopOverlays(origin: () => string | null): void {
   )
 
   ipcMain.handle(Ipc.overlays.activateOwner, (event, id: unknown): void => {
-    if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id))
-      throw new Error('invalid desktop overlay')
-    const row = resolveOverlay(event.sender, id)
-    if (row === undefined) throw new Error('desktop overlay not found')
+    const row = requireOverlay(event.sender, id)
     const owner = webContentsById(row.ownerWcId)
     const ownerWindow = owner === undefined ? null : BrowserWindow.fromWebContents(owner)
     if (ownerWindow === null || ownerWindow.isDestroyed())
@@ -509,10 +498,7 @@ export function setupDesktopOverlays(origin: () => string | null): void {
   })
 
   ipcMain.handle(Ipc.overlays.focus, (event, id: unknown): void => {
-    if (typeof id !== 'string' || !DESKTOP_ID_RE.test(id))
-      throw new Error('invalid desktop overlay')
-    const row = resolveOverlay(event.sender, id)
-    if (row === undefined) throw new Error('desktop overlay not found')
+    const row = requireOverlay(event.sender, id)
     if (row.win.isMinimized()) row.win.restore()
     row.win.show()
     row.win.focus()

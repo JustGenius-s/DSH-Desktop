@@ -1,7 +1,7 @@
 /**
  * DSH-Desktop 插件契约。
  *
- * 这是 `window.dshDesktop` 的标准表面：四族能力，纯 JSON / 回调，
+ * 这是 `window.dshDesktop` 的标准接口：五组能力，纯 JSON / 回调，
  * 不出现 Electron 类型。插件只应依赖本文件里的形状；菜单、托盘、
  * 通知、overlay 窗口与更新执行的原生实现都在主进程，与打包代码分开。
  *
@@ -18,7 +18,7 @@
 export const DESKTOP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 // ---------------------------------------------------------------------------
-// updates — 执行（只有壳做得到）+ 兼容旧插件的检测层
+// updates — 更新执行与服务重启询问
 // ---------------------------------------------------------------------------
 
 /** 询问热重启网页服务的原因。 */
@@ -28,8 +28,7 @@ export type DesktopRestartWebReason = 'plugin' | 'dsh-runtime'
 export type DesktopRestartChoice = 'later' | 'restart'
 
 /**
- * 主进程推到网页的热重启询问文案。由桌面插件用 DSH Modal 渲染，
- * 不要走系统原生 dialog。
+ * 主进程推到网页的热重启询问文案，由 onPrompt 的订阅者渲染并回执。
  */
 export interface DesktopRestartPrompt {
   id: string
@@ -222,13 +221,13 @@ export interface DesktopOverlayClosed {
 }
 
 export interface DshDesktopOverlays {
-  /** 打开一扇同源 overlay；同一 contributor 再次 open 会替换旧窗。 */
+  /** 打开同源浮窗；同一 contributor 再次 open 时复用窗口并更新规格。 */
   open(spec: DesktopOverlayOpenSpec): Promise<DesktopOverlayInfo>
   update(id: string, spec: DesktopOverlayUpdateSpec): Promise<DesktopOverlayInfo>
   /** 绝对坐标或 delta；越界会被 clamp，`hitEdge` 表示撞到屏边。 */
   move(id: string, spec: DesktopOverlayMoveSpec): Promise<DesktopOverlayMoveResult>
   setIgnoreMouseEvents(id: string, ignore: boolean, opts?: { forward?: boolean }): Promise<void>
-  /** Restore, show, and focus the DSH window that owns this overlay. */
+  /** 还原、显示并聚焦创建该浮窗的 DSH 窗口。 */
   activateOwner(id: string): Promise<void>
   focus(id: string): Promise<void>
   close(id: string): Promise<void>
@@ -242,7 +241,7 @@ export interface DshDesktopOverlays {
 
 /** 单个 bundle 插件在恢复页里的展示行。 */
 export interface DesktopPluginInfo {
-  /** bundle 包名（如 `@just-genius/dsh-desktop-update`）。 */
+  /** bundle 包名（如 `@deepseek-ai/dsh-web-app`）。 */
   name: string
   /** 是否启用（在 profile 的 `dsh.profile.bundles` 里）。 */
   enabled: boolean
@@ -250,7 +249,7 @@ export interface DesktopPluginInfo {
   core: boolean
   /** 疑似导致本次启动失败的元凶（高亮，不自动禁用）。 */
   suspected: boolean
-  /** 是否为桌面端自带插件的目录。 */
+  /** 是否属于旧版桌面内置插件，保留该标记以兼容恢复页。 */
   desktopOwned: boolean
 }
 
@@ -279,9 +278,8 @@ export interface DshDesktopPlugins {
 // ---------------------------------------------------------------------------
 
 /**
- * 桌面壳注入到网页的标准 API。五族并列：
- * updates = 更新执行（检测在插件 host 半侧；壳侧另留一套兼容 0.1.x 旧插件
- * 的检测端点）；seats = 持久原生 UI 贡献；notify = 短暂系统通知；
+ * 桌面壳注入到网页的标准 API：
+ * updates = 更新执行与服务重启；seats = 持久原生 UI 贡献；notify = 短暂系统通知；
  * overlays = 同源原生小窗；plugins = 插件清单。
  */
 export interface DshDesktop {

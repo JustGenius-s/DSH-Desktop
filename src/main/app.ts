@@ -1,15 +1,6 @@
 /**
- * DSH-Desktop Electron 主进程。
- *
- * 职责：应用就绪后拉起一个 dsh web host 子进程，等它就绪，再开一个
- * BrowserWindow 指向 `dsh web` 打印的启动 URL（新运行时带 `?token=`）；
- * 退出时负责回收子进程。
- * 运行中可热重启网页服务（不关桌面壳），让插件配置 / DSH 运行时立刻生效。
- * 前端是纯 web SPA，host 是纯 node 服务，本进程只做编排。
- *
- * 首启可能要先装外置 DSH 运行时（几十秒），期间用一个 splash 窗口给
- * 用户进度反馈，装完/就绪后再过渡到主窗口。启动失败则进插件恢复页，
- * 由用户决定禁用哪些插件后重启（不自动隔离）。
+ * Electron 应用编排：准备 DSH 运行时、启动服务、交接启动页与主窗口，
+ * 并处理热重启和退出。启动失败时打开恢复页，由用户决定是否禁用插件。
  */
 
 import { app, dialog, type BrowserWindow } from 'electron'
@@ -55,12 +46,8 @@ import { focusMainWindow, focusWindow } from './windows/registry'
 import { createSplash, setSplashStatus } from './windows/splash'
 
 /**
- * 开发版可以和已安装版同时运行，但两者不能共享 Chromium 数据目录：
- * 已安装版占用 Service Worker 数据库时，开发版清理同一数据库会永久卡住。
- * DSH runtime/profile 仍按原约定共用 ~/.dsh，这里只隔离 Electron userData。
- *
- * 必须在 ready 之前改路径——上游注释里提到的「第二个窗口期」不存在，
- * setPath 在 ready 之后改就晚了。
+ * 在 ready 前隔离开发版的 Chromium 数据，避免与已安装版争用数据库。
+ * DSH runtime/profile 仍共用 DSH_HOME。
  */
 if (!app.isPackaged) {
   app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))
@@ -71,7 +58,7 @@ if (!isPrimaryInstance) {
   app.quit()
 } else if (app.isPackaged) {
   app.on('second-instance', (_event, argv) => {
-    // 二次启动会在 Dock 里闪一下再因单实例锁退出；顺带把旧实例瓷砖拉回。
+    // 二次启动退出后恢复已有实例的 Dock 图标和主窗口。
     enforceRegularDockPolicy()
     if (argv.includes('--dsh-test-notify')) showTestBanner()
     focusMainWindow()
@@ -125,7 +112,7 @@ async function waitExitOrReady(
 
 function attachExitHandler(host: DshHost): void {
   host.child.on('exit', (code, signal) => {
-    // 主动退出、热重启换进程、或隔离重试的旧进程不弹错误框。
+    // 主动退出、热重启或已被替换的进程不弹错误框。
     if (stopping || restartingWeb || dshProcess !== host.child) return
     const output = host.recentOutput()
     try {
@@ -157,13 +144,8 @@ interface BootResult {
 }
 
 /**
- * 拉起一次 dsh web，等它就绪。
- *
- * 单次启动、不自动隔离：失败时把输出带回给调用方，由启动流程走插件恢复页
- * （recordBootFailure → openRecoveryWindow），用户自己决定禁用哪些插件再
- * 重启。只有用户明确禁用才会改动 bundles。
- *
- * 成功时更新运行进程、端口与 origin，返回本次启动 URL。
+ * 启动一次 dsh web。成功后记住进程、端口与 origin；失败时返回输出，
+ * 由调用方选择恢复页或错误提示，不自动改动插件配置。
  */
 async function bootDsh(port: number, bin: string): Promise<BootResult> {
   const host = startDsh(port, bin)
@@ -218,8 +200,7 @@ async function restartDshWebImpl(): Promise<void> {
         port = await findFreePort()
       }
 
-      // 热重启失败不自动隔离插件（启动流程已改为「提示 + 恢复页由用户决定」）：
-      // 把失败原因摊开给用户看，保持与首次启动一致的处理方式。
+      // 热重启失败时保留配置并显示原因，供用户排查。
       const result = await bootDsh(port, bin)
       if (result.launchUrl === null) {
         const summary = summarizeDshFailure(result.lastOutput)
@@ -230,9 +211,8 @@ async function restartDshWebImpl(): Promise<void> {
 
       markPluginConfigApplied()
 
-      const launchUrl = result.launchUrl
       const win = mainWindow
-      if (launchUrl !== null && win !== null && !win.isDestroyed()) {
+      if (win !== null && !win.isDestroyed()) {
         try {
           await clearStaleDshAuthCookies()
         } catch (error) {
@@ -241,7 +221,7 @@ async function restartDshWebImpl(): Promise<void> {
             error,
           )
         }
-        await win.loadURL(launchUrl)
+        await win.loadURL(result.launchUrl)
       }
     } finally {
       restartingWeb = false
@@ -264,9 +244,7 @@ registerDshWebHost({
 
 app.whenReady().then(async () => {
   if (!isPrimaryInstance) return
-  // Dock 图标「闪一下就没」发生在 splash 首窗显示前后：瓷砖被压掉时
-  // activationPolicy 往往仍是 regular，单靠 setActivationPolicy 拉不回来。
-  // 常驻守卫：任何时刻瓷砖被压掉都会拉回（V2 不再设 20 秒截止）。
+  // 窗口切换可能隐藏 Dock 图标，守卫会在应用运行期间尝试恢复。
   startDockPolicyGuard()
   // pnpm start 跑的是 Electron 二进制，菜单栏最左默认写 "Electron"；
   // 先改名，后面 setApplicationMenu 才显示 DSH-Desktop。
@@ -305,16 +283,12 @@ app.whenReady().then(async () => {
     return
   }
 
-  // 单次启动：不自动隔离。失败时归因（仅用于高亮）并跳转自建插件管理页，
-  // 由用户决定禁用哪些插件后重启。只有用户明确禁用才会改动 bundles。
   setSplashStatus(splash, '正在启动 DSH 服务…')
   const boot = await bootDsh(port, bin)
 
   if (boot.launchUrl === null) {
     recordBootFailure(boot.lastOutput)
-    // 启动失败统一进自建插件管理页：页面展示错误尾部 + 疑似元凶（归因命中时
-    // 高亮）+ 全部插件开关 + 重启。用户禁用疑似插件后重启即可；归因未命中时
-    // 页面仍能展示原始错误尾部并允许用户手动排查插件。
+    // 即使无法归因到插件，恢复页也能展示原始错误。
     setupPluginRecovery()
     splash.close()
     openRecoveryWindow()
@@ -374,10 +348,10 @@ app.on('before-quit', () => {
   stopDockPolicyGuard()
   stopPluginConfigWatch()
   closeAllOverlays()
-  const p = dshProcess
+  const child = dshProcess
   dshProcess = null
-  if (p && !p.killed) {
-    p.kill('SIGTERM')
+  if (child && !child.killed) {
+    child.kill('SIGTERM')
   }
 })
 

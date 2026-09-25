@@ -2,9 +2,8 @@ import type { BrowserWindow, WebContents } from 'electron'
 import { MAX_BODY, MAX_TITLE, WEB_NOTIFICATION_CONTRIBUTOR } from './constants'
 
 /**
- * 网页 `new Notification()` 在 Chromium 里可能显示已授权，但 macOS 的
- * UNUserNotificationCenter 从未被问过——系统静默丢掉横幅，连 error 都不回。
- * 把页面里的 Notification 接到壳的原生通知：第一次 show 会弹出系统授权框。
+ * 将网页 Notification 接入桌面通知桥，统一使用主进程的原生通知和横幅。
+ * Chromium 的权限状态不代表系统已授权；系统通知能否展示仍取决于系统设置。
  */
 const WEB_NOTIFICATION_BRIDGE = `(() => {
   if (window.__dshNotifyBridge) return

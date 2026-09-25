@@ -54,6 +54,7 @@ After a successful boot, the web port is saved in `web-port.json` under Electron
 pnpm install
 pnpm collect      # download node + pnpm into runtime/
 pnpm start        # first launch installs @deepseek-ai/dsh (~1-2 min)
+pnpm dev          # alias for start
 ```
 
 Dev and packaged behave identically: both use the bundled node and the external `~/.dsh/runtime`.
@@ -91,7 +92,7 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 
 ## Desktop plugin API
 
-The shell injects `window.dshDesktop` into the DSH page (`updates` / `seats` / `notify` / `overlays`). Plugins should depend on that contract, not on Electron packaging code. See [docs/desktop-api.md](docs/desktop-api.md).
+The shell injects `window.dshDesktop` into the DSH page (`updates` / `seats` / `notify` / `overlays` / `plugins`). Plugins should depend on that contract, not on Electron packaging code. See [docs/desktop-api.md](docs/desktop-api.md).
 
 ## Our plugins
 

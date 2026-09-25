@@ -7,7 +7,7 @@ vi.mock('../src/main/runtime/environment', () => ({
   withBundledBinPath: (env: NodeJS.ProcessEnv) => env,
 }))
 
-import { onceExit } from '../src/main/runtime/host'
+import { onceExit, withRaisedHttpHeaderLimit } from '../src/main/runtime/host'
 
 function childProcess(signalCode: NodeJS.Signals | null = null): ChildProcess {
   return Object.assign(new EventEmitter(), { exitCode: null, signalCode }) as ChildProcess
@@ -47,3 +47,11 @@ test('an exit event cancels the pending timeout', async () => {
   expect(child.listenerCount('exit')).toBe(0)
   expect(vi.getTimerCount()).toBe(0)
 })
+
+test.each(['--max-http-header-size=8192', '--max-http-header-size 8192'])(
+  'preserves an explicit header limit in NODE_OPTIONS: %s',
+  (option) => {
+    const env = { NODE_OPTIONS: `--no-warnings ${option}` }
+    expect(withRaisedHttpHeaderLimit(env)).toEqual(env)
+  },
+)

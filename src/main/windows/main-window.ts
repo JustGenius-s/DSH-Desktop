@@ -16,11 +16,7 @@ interface MainWindowOptions {
 }
 
 /**
- * 当前注入的标题栏 chrome 样式 key。
- *
- * `did-finish-load` 每次导航都会重跑，而旧 `<style>` 不随导航丢弃：
- * 不先移除就会在热重启/刷新后把同一套规则叠上一层又一层（每层都带
- * `!important`，面板的内缩 padding 会越叠越宽）。
+ * 记录 insertCSS 返回的 key，在再次注入前尝试移除；导航可能使旧 key 失效。
  */
 const titleBarChromeKeys: string[] = []
 
@@ -81,14 +77,14 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // 向 DSH 网页暴露 window.dshDesktop（updates / seats / notify / overlays）。
+      // 通过沙箱 preload 暴露 window.dshDesktop。
       preload: preloadPath(),
     },
   })
 
   setWindowRole(win, 'main')
   win.setMenuBarVisibility(false)
-  // 首启最大化（铺满工作区）：默认 bounds 仍作为最大化前的还原创备用。
+  // 首启最大化；默认 bounds 留作窗口还原时使用。
   win.maximize()
   win.once('ready-to-show', () => options.onReady(win))
   win.on('closed', () => options.onClosed(win))
@@ -128,11 +124,7 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
 }
 
 /**
- * 把标题栏 chrome（窗口拖动热区 + 浮层穿透切断）注入 DSH 网页。
- *
- * 规则本体在 `titlebar.ts` 的纯函数里，便于单测；这里只做注入。
- * 注入必须幂等：`did-finish-load` 会在每次 reload / 热重启后重跑，而旧的
- * `<style>` 不会随导航清掉，重复 insertCSS 会让规则无限堆积。
+ * 替换标题栏拖动与浮层穿透样式。规则定义在 titlebar.ts。
  */
 async function applyTitleBarChrome(win: BrowserWindow): Promise<void> {
   const wc = win.webContents
