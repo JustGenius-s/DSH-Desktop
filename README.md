@@ -8,7 +8,7 @@
 
 <h1 align="center">DSH-Desktop</h1>
 
-Electron desktop shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Bundles node + pnpm, installs `@deepseek-ai/dsh` into `~/.dsh/runtime`, and serves the `dsh web` UI in a browser window.
+Electron desktop shell for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Uses Electron's embedded Node and bundled pnpm to install `@deepseek-ai/dsh` into `~/.dsh/runtime` and serve the `dsh web` UI.
 
 <p align="center">
   <img src="public/desktop.png" alt="DSH-Desktop screenshot" />
@@ -42,7 +42,8 @@ Requires 64-bit Windows.
 
 ```
 Electron main process
-  ├─ bundled node + pnpm (resources/runtime; repo-root runtime/ in dev)
+  ├─ embedded Node (ELECTRON_RUN_AS_NODE) + bundled pnpm
+  ├─ node/pnpm launchers (resources/runtime; repo-root runtime/ in dev)
   ├─ first launch: pnpm installs @deepseek-ai/dsh → ~/.dsh/runtime (upgradeable)
   ├─ spawn  dsh web --host 127.0.0.1 --port <free-port>
   └─ BrowserWindow → http://127.0.0.1:<port>
@@ -56,12 +57,12 @@ After a successful boot, the web port is saved in `web-port.json` under Electron
 
 ```sh
 pnpm install
-pnpm collect      # download node + pnpm into runtime/
+pnpm collect      # collect pnpm and Electron launchers into runtime/
 pnpm start        # first launch installs @deepseek-ai/dsh (~1-2 min)
 pnpm dev          # alias for start
 ```
 
-Dev and packaged behave identically: both use the bundled node and the external `~/.dsh/runtime`.
+Dev and packaged builds both use the current Electron executable and the external `~/.dsh/runtime`. No standalone Node binary is downloaded or shipped. Plugin commands find a small `node` launcher through PATH; the executable path is supplied at each launch, so moving or upgrading the app does not leave stale paths.
 
 Tests (no Electron window or browser required):
 
@@ -83,6 +84,8 @@ pnpm dist:mac     # macOS dmg + zip
 pnpm dist:win     # Windows nsis + zip (run on Windows)
 ```
 
+Packaging recollects pnpm and the launchers. Windows builds require the matching MSVC Native Tools environment and Windows SDK for the small forwarding `node.exe`.
+
 macOS artifacts are unsigned; Gatekeeper blocks first launch. Allow with:
 
 ```sh
@@ -91,8 +94,14 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 
 ## Runtime dependencies
 
-- node (latest) + pnpm (latest), bundled via `scripts/collect-runtime.mjs`
+- Node supplied by Electron; pnpm (latest) and command launchers collected by `scripts/collect-runtime.mjs`
 - `@deepseek-ai/dsh` (npm latest), installed to `~/.dsh/runtime`
+
+## Updating Electron
+
+Run `pnpm add -D -E electron@<version>` and `pnpm check`, then launch and test the packaged app.
+
+Launchers and native plugin builds use the running Electron's path and version. Keep the `runAsNode` fuse enabled. DSH may reject a new Node/V8 combination, and existing ABI-specific plugins may need rebuilding; verify the UI, terminals and plugin installation before release. The DSH installation is shared with the CLI, so do not rebuild the entire shared runtime for Electron.
 
 ## Desktop plugin API
 

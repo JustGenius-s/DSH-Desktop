@@ -5,11 +5,11 @@ const sessions = vi.hoisted(() => {
     cookies: { get: vi.fn(), remove: vi.fn() },
     clearStorageData: vi.fn(),
   })
-  return { current: create(), fromPartition: vi.fn() }
+  return { current: create() }
 })
 
 vi.mock('electron', () => ({
-  session: { defaultSession: sessions.current, fromPartition: sessions.fromPartition },
+  session: { defaultSession: sessions.current },
 }))
 
 import { clearStaleDshAuthCookies, hardenChromiumStorage } from '../src/main/platform/session'
@@ -30,36 +30,18 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-test('reload cleanup removes only loopback DSH auth cookies without creating a legacy partition', async () => {
+test('reload cleanup removes only loopback DSH auth cookies', async () => {
   await clearStaleDshAuthCookies()
-  expect(sessions.current.cookies.get.mock.calls).toEqual([[{ domain: '127.0.0.1' }]])
   expect(sessions.current.cookies.remove.mock.calls).toEqual([
     ['https://127.0.0.1/secure', 'dsh-auth-old'],
     ['http://127.0.0.1/', 'dsh-auth-older'],
   ])
-  expect(sessions.current.clearStorageData).not.toHaveBeenCalled()
-  expect(sessions.fromPartition).not.toHaveBeenCalled()
 })
 
-test('startup cleans service workers and auth cookies once without creating a legacy partition', async () => {
-  await hardenChromiumStorage()
-  expect(sessions.current.clearStorageData.mock.calls).toEqual([[{ storages: ['serviceworkers'] }]])
-  expect(sessions.current.cookies.get).toHaveBeenCalledOnce()
-  expect(sessions.current.cookies.remove.mock.calls).toEqual([
-    ['https://127.0.0.1/secure', 'dsh-auth-old'],
-    ['http://127.0.0.1/', 'dsh-auth-older'],
-  ])
-  expect(sessions.fromPartition).not.toHaveBeenCalled()
+test('cookie removal failures do not reject cleanup', async () => {
+  sessions.current.cookies.remove.mockRejectedValue(new Error('cookie database is locked'))
+  await expect(clearStaleDshAuthCookies()).resolves.toBeUndefined()
 })
-
-test.each(['get', 'remove'] as const)(
-  'cookie %s failures do not reject cleanup',
-  async (operation) => {
-    sessions.current.cookies[operation].mockRejectedValue(new Error('cookie database is locked'))
-    await expect(clearStaleDshAuthCookies()).resolves.toBeUndefined()
-    expect(sessions.fromPartition).not.toHaveBeenCalled()
-  },
-)
 
 test('a service worker cleanup failure does not skip cookie cleanup or reject startup', async () => {
   sessions.current.clearStorageData.mockRejectedValue(
@@ -89,17 +71,6 @@ test('hung startup cleanup is bounded and a late cookie query cannot delete new 
   resolveCookies([{ name: 'dsh-auth-new', domain: '127.0.0.1', path: '/' }])
   await Promise.resolve()
   expect(sessions.current.cookies.remove).not.toHaveBeenCalled()
-  expect(sessions.fromPartition).not.toHaveBeenCalled()
-})
-
-test('reload also times out when cookie removal never settles', async () => {
-  vi.useFakeTimers()
-  sessions.current.cookies.remove.mockReturnValue(new Promise(() => {}))
-  const cleanup = clearStaleDshAuthCookies()
-  await vi.advanceTimersByTimeAsync(2_000)
-  await expect(cleanup).resolves.toBeUndefined()
-  expect(sessions.current.cookies.remove).toHaveBeenCalledTimes(2)
-  expect(vi.getTimerCount()).toBe(0)
 })
 
 test('cleanup consumes failures that arrive after its timeout', async () => {

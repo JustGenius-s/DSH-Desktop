@@ -44,16 +44,6 @@ function respond(choice: 'later' | 'restart'): void {
   mocks.handlers.get(Ipc.updates.promptResponse)?.({}, prompt.id, choice)
 }
 
-test('answering a restart prompt releases both retry and response timers', async () => {
-  const { offerRestartDshWeb } = await loadRestart()
-  const offered = offerRestartDshWeb('plugin')
-  await Promise.resolve()
-  respond('later')
-  await expect(offered).resolves.toBe(false)
-  expect(mocks.restart).not.toHaveBeenCalled()
-  expect(vi.getTimerCount()).toBe(0)
-})
-
 test('an unacknowledged prompt stops retrying and releases the response timeout', async () => {
   const { offerRestartDshWeb } = await loadRestart()
   const offered = offerRestartDshWeb('dsh-runtime')

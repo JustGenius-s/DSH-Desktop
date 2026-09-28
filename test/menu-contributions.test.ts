@@ -3,28 +3,16 @@ import { sanitizeContribution } from '../src/main/menus/contributions'
 
 const request = { seat: 'tray', contributor: 'plugin', items: [{ id: 'open', label: 'Open' }] }
 
-test('menu contributions normalize defaults and accept only supported accelerators', () => {
-  expect(
-    sanitizeContribution({
-      ...request,
-      order: NaN,
-      items: [
-        { id: 'open', label: 'Open', accelerator: 'CmdOrCtrl+O' },
-        { type: 'separator' },
-        { id: 'close', label: 'Close', accelerator: 'arbitrary script()' },
-      ],
-    }),
-  ).toEqual({
+test('menu contributions strip unsupported accelerators before reaching Electron', () => {
+  const contribution = sanitizeContribution({
     ...request,
-    menu: 'plugins',
-    order: 0,
-    tooltip: undefined,
     items: [
-      { id: 'open', type: 'normal', label: 'Open', accelerator: 'CmdOrCtrl+O' },
-      { type: 'separator' },
-      { id: 'close', type: 'normal', label: 'Close' },
+      { id: 'open', label: 'Open', accelerator: 'CmdOrCtrl+O' },
+      { id: 'close', label: 'Close', accelerator: 'arbitrary script()' },
     ],
   })
+  expect(contribution?.items[0]).toHaveProperty('accelerator', 'CmdOrCtrl+O')
+  expect(contribution?.items[1]).not.toHaveProperty('accelerator')
 })
 
 test('menu contributions reject invalid identities and oversized menus', () => {

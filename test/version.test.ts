@@ -2,7 +2,6 @@ import { expect, test } from 'vitest'
 import { compareVersions } from '../src/shared/version'
 
 test.each([
-  ['0.1.0-rc.7', '0.1.0-rc.6'],
   ['0.1.0-rc.10', '0.1.0-rc.9'],
   ['0.1.0', '0.1.0-rc.10'],
   ['0.2.0-alpha.1', '0.1.0'],

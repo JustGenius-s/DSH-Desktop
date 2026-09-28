@@ -17,14 +17,14 @@
     "collect": "node scripts/collect-runtime.mjs",
     "start": "npm run build && node scripts/start.mjs",
     "dev": "npm run start --",
-    "pack": "npm run build && electron-builder --dir",
+    "pack": "npm run build && npm run collect && electron-builder --dir",
     "dist:mac": "npm run build && npm run collect && electron-builder --mac",
     "dist:win": "npm run build && npm run collect && electron-builder --win"
   },
   "devDependencies": {
     "@electron/notarize": "^2.5.0",
     "@types/node": "^22.0.0",
-    "electron": "^44.4.5",
+    "electron": "45.0.0-alpha.6",
     "electron-builder": "^26.15.3",
     "prettier": "3.9.9",
     "typescript": "^6.0.3",
@@ -51,7 +51,6 @@
         "to": "runtime",
         "filter": [
           "**/*",
-          "!**/*.exe",
           "!**/*.map",
           "!**/pnpm/dist/node_modules/@reflink/**"
         ]
@@ -62,6 +61,9 @@
       }
     ],
     "asar": true,
+    "electronFuses": {
+      "runAsNode": true
+    },
     "electronLanguages": [
       "en",
       "zh_CN"

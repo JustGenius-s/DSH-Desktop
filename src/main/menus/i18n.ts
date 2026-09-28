@@ -11,7 +11,7 @@
  * 语言来源见 ./shell-locale：用户设置优先（web profile 的 locale 偏好），
  * 没设置过时按系统语言。本模块只管文案，不关心语言从哪来。
  *
- * 纯模块、不引 electron，便于 vitest 直接测（见 test/menu-i18n.test.ts）。
+ * 纯模块，不依赖 Electron。
  */
 
 import type { ShellLang } from '../locale'

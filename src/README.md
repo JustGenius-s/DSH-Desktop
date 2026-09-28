@@ -17,7 +17,7 @@ src/
     ├── locale.ts              # 读取 DSH 用户语言偏好
     ├── runtime/               # DSH 服务与运行环境
     │   ├── paths.ts           # DSH_HOME 与外置运行时目录
-    │   ├── environment.ts     # 内置 node/pnpm、PATH、pnpm 执行
+    │   ├── environment.ts     # Electron Node 模式、工具 PATH、pnpm 执行
     │   ├── installation.ts    # 安装、版本读取、npm 渠道查询
     │   ├── host.ts            # 子进程启动/停止、就绪探测、日志尾部
     │   └── web-port.ts        # 回环端口分配与持久化
@@ -64,6 +64,9 @@ src/
 主窗口以固定名称 `dsh-main` 使用 Electron 的窗口状态持久化；首次采用默认尺寸，
 之后恢复用户的尺寸、位置和显示状态，不额外强制最大化。浮窗使用独立缩放模式，
 与主窗口共用会话但不共享页面缩放。
+
+DSH、pnpm 和 node 转发器共用当前 `process.execPath`，仅在子进程设置 Node 模式。
+原生模块构建也使用当前 Electron 版本与头文件；不要写死安装路径或版本。
 
 ## 验证
 

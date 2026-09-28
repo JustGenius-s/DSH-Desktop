@@ -1,5 +1,5 @@
 /**
- * 外置 DSH 运行时管理：内置 node + pnpm，把 `@deepseek-ai/dsh` 装到
+ * 外置 DSH 运行时管理：Electron 内置 Node + pnpm，把 `@deepseek-ai/dsh` 装到
  * `~/.dsh/runtime`，并支持自动检测 / 手动触发升级。DSH 升级从此只走
  * pnpm，不再重打包、重签名桌面版。
  */

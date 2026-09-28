@@ -3,11 +3,11 @@ import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 vi.mock('../src/main/runtime/environment', () => ({
-  bundledNodeBin: () => '/unused/node',
-  withBundledBinPath: (env: NodeJS.ProcessEnv) => env,
+  electronNodeFlags: () => ['--no-use-system-ca'],
+  withElectronNodeEnvironment: (env: NodeJS.ProcessEnv) => env,
 }))
 
-import { onceExit, withRaisedHttpHeaderLimit } from '../src/main/runtime/host'
+import { dshNodeFlags, onceExit } from '../src/main/runtime/host'
 
 function childProcess(signalCode: NodeJS.Signals | null = null): ChildProcess {
   return Object.assign(new EventEmitter(), { exitCode: null, signalCode }) as ChildProcess
@@ -52,6 +52,11 @@ test.each(['--max-http-header-size=8192', '--max-http-header-size 8192'])(
   'preserves an explicit header limit in NODE_OPTIONS: %s',
   (option) => {
     const env = { NODE_OPTIONS: `--no-warnings ${option}` }
-    expect(withRaisedHttpHeaderLimit(env)).toEqual(env)
+    expect(dshNodeFlags(env)).toEqual(['--no-use-system-ca', '--max-http-header-size=8192'])
+    expect(env.NODE_OPTIONS).toBe(`--no-warnings ${option}`)
   },
 )
+
+test('the default HTTP header limit is a CLI flag even when Electron ignores NODE_OPTIONS', () => {
+  expect(dshNodeFlags({})).toEqual(['--no-use-system-ca', '--max-http-header-size=65536'])
+})

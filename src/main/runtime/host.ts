@@ -7,7 +7,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { get } from 'node:http'
 import { createServer } from 'node:net'
-import { bundledNodeBin, withBundledBinPath } from './environment'
+import { electronNodeFlags, withElectronNodeEnvironment } from './environment'
 import { DSH_HOST } from './web-port'
 
 /** dsh 启动后轮询就绪的总超时。 */
@@ -31,31 +31,35 @@ export interface DshHost {
 }
 
 /** Node 默认 max-http-header-size=16KiB。打包版若漏清 cookie，combo URL 会 431。 */
-const RAISED_HTTP_HEADER_SIZE = '--max-http-header-size=65536'
-
-/** 给 dsh 子进程抬高 HTTP 头上限，且不覆盖调用方已设置的同名 flag。 */
-export function withRaisedHttpHeaderLimit(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const current = env.NODE_OPTIONS ?? ''
-  if (/(?:^|\s)--max-http-header-size(?:=|\s|$)/.test(current)) return env
-  return {
-    ...env,
-    NODE_OPTIONS:
-      current === '' ? RAISED_HTTP_HEADER_SIZE : `${current} ${RAISED_HTTP_HEADER_SIZE}`,
-  }
+export function dshNodeFlags(env: NodeJS.ProcessEnv): string[] {
+  const configured = /(?:^|\s)--max-http-header-size(?:=|\s+)(\d+)(?=\s|$)/.exec(
+    env.NODE_OPTIONS ?? '',
+  )?.[1]
+  // Electron 打包后可能忽略 NODE_OPTIONS；把所需配置作为显式参数传入。
+  return [...electronNodeFlags(), `--max-http-header-size=${configured ?? '65536'}`]
 }
 
 /**
- * spawn dsh web 子进程，用内置 node 跑外置 dsh（打包与开发模式一致）。
+ * 用当前 Electron 的 Node 模式启动外置 dsh（打包与开发模式一致）。
  * @param port - 回环端口。
  * @param bin - dsh CLI 入口（由 app.ts 先 `ensureDshInstalled()` 解析）。
  */
 export function startDsh(port: number, bin: string): DshHost {
-  const env: NodeJS.ProcessEnv = withRaisedHttpHeaderLimit(withBundledBinPath({ ...process.env }))
+  const env = withElectronNodeEnvironment(process.env)
   // --no-open：桌面壳自己用 BrowserWindow 渲染这个 host，不允许 dsh 再拉起
   // 系统默认浏览器（rc.8 起 web-app 默认会在启动后打开默认浏览器）。
-  const args = [bin, 'web', '--host', DSH_HOST, '--port', String(port), '--no-open']
+  const args = [
+    ...dshNodeFlags(env),
+    bin,
+    'web',
+    '--host',
+    DSH_HOST,
+    '--port',
+    String(port),
+    '--no-open',
+  ]
 
-  const child = spawn(bundledNodeBin(), args, {
+  const child = spawn(process.execPath, args, {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,

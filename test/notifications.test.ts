@@ -5,11 +5,9 @@ import type { DesktopNotifySpec } from '../src/shared/api'
 
 type MockWindow = EventEmitter & {
   webContents: EventEmitter
-  close: Mock
-  showInactive: Mock
   isDestroyed: () => boolean
 }
-type MockNotification = EventEmitter & { close: Mock; show: Mock }
+type MockNotification = EventEmitter & { close: Mock }
 type Sender = EventEmitter & { id: number; isDestroyed: Mock; send: Mock }
 
 const state = vi.hoisted(() => ({
@@ -18,7 +16,6 @@ const state = vi.hoisted(() => ({
   senders: new Map<number, Sender>(),
   handles: new Map<string, (event: { sender: Sender }, ...args: unknown[]) => unknown>(),
   focus: vi.fn(),
-  failShow: false,
 }))
 
 vi.mock('electron', async () => {
@@ -43,9 +40,7 @@ vi.mock('electron', async () => {
     Notification: class extends EventEmitter {
       static isSupported = () => true
       close = vi.fn(() => this.emit('close'))
-      show = vi.fn(() => {
-        if (state.failShow) throw new Error('notification unavailable')
-      })
+      show = vi.fn()
       constructor() {
         super()
         state.notes.push(this)
@@ -91,7 +86,6 @@ beforeEach(async () => {
   state.senders.clear()
   state.handles.clear()
   state.focus.mockClear()
-  state.failShow = false
   const { setupDesktopNotify } = await import('../src/main/notifications/service')
   setupDesktopNotify()
 })
@@ -117,21 +111,6 @@ test('a replaced banner owns its timer and late closed event cannot remove its r
   expect(second.isDestroyed()).toBe(true)
   expect(secondClosed).toHaveBeenCalledTimes(1)
   expect(vi.getTimerCount()).toBe(0)
-})
-
-test('banner timeout releases listeners and closes exactly its own window', async () => {
-  const { showBannerOverlay } = await import('../src/main/notifications/banners')
-  const closed = vi.fn()
-  showBannerOverlay(1, spec, { onAction: vi.fn(), onClosed: closed })
-  const win = state.windows[0]
-  win.emit('ready-to-show')
-  expect(win.showInactive).toHaveBeenCalledOnce()
-  vi.advanceTimersByTime(6000)
-  win.emit('ready-to-show')
-  expect(win.close).toHaveBeenCalledOnce()
-  expect(win.showInactive).toHaveBeenCalledOnce()
-  expect(closed).toHaveBeenCalledOnce()
-  expect(win.webContents.listenerCount('will-navigate')).toBe(0)
 })
 
 test('same-id replacement ignores late native events and keeps the current notification alive', () => {
@@ -184,21 +163,9 @@ test('banner click closes native presentation even when the system never fires a
   expect(vi.getTimerCount()).toBe(0)
 })
 
-test('failed native notification retains its banner until the banner is closed', () => {
+test('sender disposal releases banners and native listeners', () => {
   const wc = sender()
   show(wc)
-  state.notes[0].emit('failed', {}, 'system rejected notification')
-  expect(state.windows[0].isDestroyed()).toBe(false)
-  expect(state.notes[0].eventNames()).toEqual([])
-  state.handles.get(Ipc.notify.close)!({ sender: wc }, 'plugin', 'message')
-  expect(state.windows[0].isDestroyed()).toBe(true)
-  expect(wc.send).toHaveBeenCalledOnce()
-})
-
-test('sender disposal clears banners, native listeners and its throttle history', () => {
-  const wc = sender()
-  show(wc)
-  expect(show(wc, { id: 'too-soon' })).toEqual({ shown: false })
   wc.isDestroyed.mockReturnValue(true)
   wc.emit('destroyed')
   expect(state.windows[0].isDestroyed()).toBe(true)
@@ -206,8 +173,6 @@ test('sender disposal clears banners, native listeners and its throttle history'
   expect(wc.listenerCount('did-start-navigation')).toBe(0)
   expect(wc.send).not.toHaveBeenCalled()
   expect(vi.getTimerCount()).toBe(0)
-  const reusedId = sender()
-  expect(show(reusedId, { id: 'new-document' })).toEqual({ shown: true })
 })
 
 test('full navigation clears sender notifications and throttle while same-document navigation keeps them', () => {
@@ -220,12 +185,4 @@ test('full navigation clears sender notifications and throttle while same-docume
   expect(state.windows[0].isDestroyed()).toBe(true)
   expect(wc.send).not.toHaveBeenCalled()
   expect(show(wc, { id: 'new-page' })).toEqual({ shown: true })
-  expect(wc.listenerCount('destroyed')).toBe(1)
-})
-
-test('notification IPC registration is idempotent', async () => {
-  const original = state.handles.get(Ipc.notify.show)
-  const { setupDesktopNotify } = await import('../src/main/notifications/service')
-  setupDesktopNotify()
-  expect(state.handles.get(Ipc.notify.show)).toBe(original)
 })

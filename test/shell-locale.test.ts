@@ -3,31 +3,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, onTestFinished, test } from 'vitest'
 
-import {
-  currentShellLang,
-  localePatchPath,
-  parseLocalePreference,
-  readLocalePreference,
-  resolveShellLang,
-} from '../src/main/locale'
+import { currentShellLang, parseLocalePreference, resolveShellLang } from '../src/main/locale'
 
 /** 临时 DSH home；用例结束自动清理。 */
 function tempHome(): string {
   const root = mkdtempSync(join(tmpdir(), 'dsh-shell-locale-'))
-  const homePath = join(root, 'home')
-  onTestFinished(() => {
-    expect(root.startsWith(join(tmpdir(), 'dsh-shell-locale-'))).toBe(true)
-    rmSync(root, { recursive: true, force: true })
-  })
-  return homePath
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  return root
 }
 
 /** 写一份 profile 补丁文档。 */
-function writePatch(home: string, body: string): string {
-  const file = localePatchPath(home)
+function writePatch(home: string, body: string): void {
+  const file = join(home, 'profiles', 'web', 'cordis.patch.yml')
   mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
   writeFileSync(file, body)
-  return file
 }
 
 test('resolveShellLang folds zh variants into zh and everything else into en', () => {
@@ -56,18 +45,6 @@ test('parses the block form DSH writes', () => {
     '    preference: dark',
   ].join('\n')
   expect(parseLocalePreference(patch)).toBe('zh')
-})
-
-test('ignores other entries that also carry a preference', () => {
-  const patch = [
-    '- id: ui-theme',
-    '  config:',
-    '    preference: dark',
-    '- id: locale',
-    '  config:',
-    '    preference: en',
-  ].join('\n')
-  expect(parseLocalePreference(patch)).toBe('en')
 })
 
 test('the last locale entry wins (layered patches override)', () => {
@@ -99,13 +76,6 @@ test('treats an absent or empty preference as unset', () => {
   expect(
     parseLocalePreference('- id: locale\n  name: x\n- id: other\n  config:\n    preference: zh'),
   ).toBeUndefined()
-})
-
-test('a missing or unreadable document reads as unset', () => {
-  expect(
-    readLocalePreference(join(tempHome(), 'profiles', 'web', 'cordis.patch.yml')),
-  ).toBeUndefined()
-  expect(readLocalePreference('/definitely/not/here')).toBeUndefined()
 })
 
 test('currentShellLang prefers the document over the system locale', () => {

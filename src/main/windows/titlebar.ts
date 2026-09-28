@@ -22,7 +22,7 @@
  */
 
 /** macOS 红绿灯带所需的最小左侧留白：三个按钮 + 最左侧按钮的左边距。 */
-export const FULLSCREEN_STRIP_INSET_PX = 80
+const FULLSCREEN_STRIP_INSET_PX = 80
 
 /**
  * 生成注入到 DSH 网页的标题栏 chrome CSS。

@@ -35,7 +35,7 @@ export function resolveShellLang(tag: string | undefined | null): ShellLang {
 const LOCALE_PATCH_RELATIVE = join('profiles', 'web', 'cordis.patch.yml')
 
 /** 语言偏好文档的绝对路径。 */
-export function localePatchPath(dshHome: string): string {
+function localePatchPath(dshHome: string): string {
   return join(dshHome, LOCALE_PATCH_RELATIVE)
 }
 
@@ -59,7 +59,7 @@ export function currentShellLang(systemLocale: string | undefined, home = dshHom
  * 读语言偏好；文件缺失 / 不可读 / 条目没写值都返回 undefined，
  * 由调用方决定回落（壳用系统语言）。
  */
-export function readLocalePreference(patchPath: string): string | undefined {
+function readLocalePreference(patchPath: string): string | undefined {
   try {
     return parseLocalePreference(readFileSync(patchPath, 'utf8'))
   } catch {

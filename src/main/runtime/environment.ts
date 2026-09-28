@@ -1,4 +1,4 @@
-/** 内置 node / pnpm 定位、子进程 PATH 与 pnpm 执行。 */
+/** Electron 的 Node 子进程环境、工具 PATH 与内置 pnpm 执行。 */
 import { app } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -8,11 +8,6 @@ import { join } from 'node:path'
 function bundledRuntimeRoot(): string {
   const base = app.isPackaged ? process.resourcesPath : app.getAppPath()
   return join(base, 'runtime')
-}
-
-/** 内置 node 可执行文件（打包时按目标平台放入 `bin/`）。 */
-export function bundledNodeBin(): string {
-  return join(bundledRuntimeRoot(), 'bin', process.platform === 'win32' ? 'node.exe' : 'node')
 }
 
 /** 按实际文件选择 pnpm 入口，兼容使用 .cjs 或 .mjs 的内置版本。 */
@@ -28,9 +23,13 @@ function bundledPnpmEntry(): string {
   return join(bin, candidates[0])
 }
 
-/** 内置 `bin/` 目录：前置进子进程 PATH，让 dsh 内部的 `spawnSync('pnpm')` 找得到 pnpm。 */
+/** 转发器缺失时直接报错，避免插件从系统 PATH 找到另一份 Node。 */
 function bundledBinDir(): string {
-  return join(bundledRuntimeRoot(), 'bin')
+  const bin = join(bundledRuntimeRoot(), 'bin')
+  if (!existsSync(join(bin, process.platform === 'win32' ? 'node.exe' : 'node'))) {
+    throw new Error('内置 Node 转发器缺失，请运行 pnpm collect 后重试。')
+  }
+  return bin
 }
 
 /** 原生依赖构建使用 pnpm 自带的可执行 node-gyp shim，不依赖全局安装。 */
@@ -83,14 +82,20 @@ function findGitBinDir(env: NodeJS.ProcessEnv): string | undefined {
   return undefined
 }
 
-/** 前置内置工具目录，保留调用方 PATH，并在 Windows 补找 Git。 */
-export function withBundledBinPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/**
+ * 只给子进程设置 Node 模式，不污染桌面主进程。
+ * 每次读取 process.execPath，升级或移动应用后不会沿用旧二进制路径。
+ * DSH 会清理 DSH_* 环境变量，因此转发器使用 ELECTRON_NODE_EXEC_PATH。
+ */
+export function withElectronNodeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const isWindows = process.platform === 'win32'
   const separator = isWindows ? ';' : ':'
   const pathKeys = Object.keys(env).filter((key) =>
     isWindows ? key.toUpperCase() === 'PATH' : key === 'PATH',
   )
-  const bundledDirs = [bundledBinDir(), bundledNodeGypBinDir()].filter((dir) => existsSync(dir))
+  const bundledDirs = [bundledBinDir()]
+  const nodeGypBin = bundledNodeGypBinDir()
+  if (existsSync(nodeGypBin)) bundledDirs.push(nodeGypBin)
   const paths = [
     ...bundledDirs,
     findGitBinDir(env),
@@ -100,17 +105,44 @@ export function withBundledBinPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Windows 的环境变量不区分大小写；只传一个 PATH，避免 Node 丢掉 Path 的值。
   for (const key of pathKeys) delete childEnv[key]
   childEnv.PATH = [...new Set(paths)].join(separator)
-  return childEnv
+  // 插件原生模块必须为正在运行的 Electron 编译，不能使用 Node 的默认头文件。
+  // prebuild 工具仍读取 npm_config_*；新版 node-gyp 优先读取 package config。
+  const runtimeEnv = {
+    ELECTRON_RUN_AS_NODE: '1',
+    ELECTRON_NODE_EXEC_PATH: process.execPath,
+    npm_config_runtime: 'electron',
+    npm_config_target: process.versions.electron,
+    npm_config_arch: process.arch,
+    npm_config_disturl: 'https://electronjs.org/headers',
+    npm_package_config_node_gyp_target: process.versions.electron,
+    npm_package_config_node_gyp_arch: process.arch,
+    npm_package_config_node_gyp_dist_url: 'https://electronjs.org/headers',
+  }
+  // node-gyp 不区分配置键大小写；不能让继承的旧目标或 nodedir 覆盖本次 Electron。
+  const replaced = new Set([
+    ...Object.keys(runtimeEnv).map((key) => key.toLowerCase()),
+    'npm_config_nodedir',
+    'npm_package_config_node_gyp_nodedir',
+  ])
+  for (const key of Object.keys(childEnv)) {
+    if (replaced.has(key.toLowerCase())) delete childEnv[key]
+  }
+  return { ...childEnv, ...runtimeEnv }
+}
+
+/** macOS 的 TLS 启动选项走命令行，避免打包进程忽略 NODE_OPTIONS。 */
+export function electronNodeFlags(): string[] {
+  return process.platform === 'darwin' ? ['--no-use-system-ca'] : []
 }
 
 /** 跑一次内置 pnpm。日志接到父进程；Windows 隐藏控制台，避免打包后弹出黑窗口。 */
 export function runPnpm(args: readonly string[]): Promise<void> {
   return new Promise((resolvePnpm, reject) => {
-    const child = spawn(bundledNodeBin(), [bundledPnpmEntry(), ...args], {
+    const child = spawn(process.execPath, [...electronNodeFlags(), bundledPnpmEntry(), ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      // node 与 node-gyp 都要进 PATH：pnpm 跑原生依赖的构建脚本时依赖它们。
-      env: withBundledBinPath(process.env),
+      // 安装脚本通过 node 转发器使用同一 Electron，node-gyp 仍由 pnpm 提供。
+      env: withElectronNodeEnvironment(process.env),
     })
     // 留住最后几行输出：pnpm 自己会把原因打到 stderr（MODULE_NOT_FOUND、
     // EPERM、构建脚本失败…），只报退出码的话在界面上完全无法诊断。

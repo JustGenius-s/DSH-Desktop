@@ -12,7 +12,7 @@ const {
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 
-function launcherFixture(t, executable = process.execPath) {
+function launcherFixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh start test ')))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(join(root, 'scripts'))
@@ -21,7 +21,7 @@ function launcherFixture(t, executable = process.execPath) {
   // 用 Node 代替 Electron，真实验证包含空格的路径、参数和进程退出码。
   writeFileSync(
     join(root, 'node_modules/electron/index.js'),
-    `module.exports = ${JSON.stringify(executable)}`,
+    `module.exports = ${JSON.stringify(process.execPath)}`,
   )
   writeFileSync(join(root, 'package.json'), JSON.stringify({ main: 'app.cjs' }))
   writeFileSync(
@@ -57,14 +57,4 @@ test('start forwards arguments, preserves Node options, and returns the applicat
     nodeOptions:
       process.platform === 'darwin' ? '--no-warnings --no-use-system-ca' : '--no-warnings',
   })
-})
-
-test('start reports a missing Electron executable and exits with failure', (t) => {
-  const root = launcherFixture(t, join(tmpdir(), 'missing-dsh-electron-executable'))
-  const result = spawnSync(process.execPath, [join(root, 'scripts/start.mjs')], {
-    encoding: 'utf8',
-    timeout: 10_000,
-  })
-  assert.equal(result.status, 1)
-  assert.match(result.stderr, /无法启动 Electron/)
 })

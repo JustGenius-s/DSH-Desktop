@@ -1,34 +1,24 @@
 /**
- * 收集内置运行时到 runtime/：最新 node + 最新 pnpm。
+ * 收集 pnpm 与 Node 命令转发器到 runtime/；Node 由 Electron 提供。
  * DSH 本体不在这里收——首启由 ensureDshInstalled() 用内置 pnpm 装到 ~/.dsh/runtime。
  *
  * 依赖 node >= 18 与 tar（macOS/Windows 自带，Linux 必备）。
  */
 
 import { execFileSync } from 'node:child_process'
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const target = process.argv[2] ?? join(desktopDir, 'runtime')
+const target = resolve(process.argv[2] ?? join(desktopDir, 'runtime'))
 const binDir = join(target, 'bin')
 
-// 默认本机平台，可经环境变量覆盖以交叉打包。
+// 默认本机平台；Windows 转发器需要在 Windows 上编译。
 const platform = process.env.TARGET_PLATFORM ?? process.platform
 const arch = process.env.TARGET_ARCH ?? process.arch
 const targetId = `${platform}-${arch}` // darwin-arm64 / win32-x64 / linux-x64
-const isWin = platform === 'win32'
-const nodeOs = isWin ? 'win' : platform // nodejs.org 把 win32 记作 win
-const nodeName = isWin ? 'node.exe' : 'node'
 
 async function download(url) {
   const res = await fetch(url)
@@ -47,32 +37,9 @@ async function installTarball(url, dest) {
   renameSync(join(target, 'package'), dest)
 }
 
-/** nodejs.org 的 index.json 按发布顺序倒序排列，取首个版本，不限定 LTS。 */
-async function latestNodeVersion() {
-  const list = JSON.parse(await (await fetch('https://nodejs.org/dist/index.json')).text())
-  return list[0].version
-}
-
 async function latestPnpmVersion() {
   const doc = JSON.parse(await (await fetch('https://registry.npmjs.org/pnpm')).text())
   return doc['dist-tags'].latest
-}
-
-async function fetchNode(version) {
-  const ext = isWin ? 'zip' : 'tar.gz'
-  const distId = `${nodeOs}-${arch}`
-  const archive = join(target, `node.${ext}`)
-  writeFileSync(
-    archive,
-    await download(`https://nodejs.org/dist/${version}/node-${version}-${distId}.${ext}`),
-  )
-  const extracted = join(target, `node-${version}-${distId}`)
-  execFileSync('tar', ['-xf', archive, '-C', target])
-  // Windows zip 把 node.exe 放在包根，tarball 放在 bin/。
-  copyFileSync(join(extracted, isWin ? '.' : 'bin', nodeName), join(binDir, nodeName))
-  chmodSync(join(binDir, nodeName), 0o755)
-  rmSync(archive, { force: true })
-  rmSync(extracted, { recursive: true, force: true })
 }
 
 async function fetchPnpm(version) {
@@ -105,35 +72,71 @@ function resolvePnpmEntry() {
   throw new Error('pnpm tarball 里没有 bin/pnpm.mjs 或 bin/pnpm.cjs')
 }
 
-/** 写 shim：dsh 内部 spawnSync('pnpm') 靠 PATH 找到它，shim 用内置 node 跑入口。 */
-function writePnpmShim(entry) {
-  if (isWin) {
+/** Windows 的 spawn('node') 需要 exe，cmd 脚本无法替代。 */
+function buildWindowsLauncher() {
+  if (process.platform !== 'win32' || !['x64', 'arm64'].includes(arch)) {
+    throw new Error('Windows Node 转发器需要在 Windows 的 MSVC x64/ARM64 Native Tools 环境中编译。')
+  }
+  const buildDir = mkdtempSync(join(tmpdir(), 'dsh-node-launcher-'))
+  try {
+    execFileSync(
+      'cl.exe',
+      [
+        '/nologo',
+        '/TC',
+        '/W4',
+        '/WX',
+        '/O2',
+        '/MT',
+        join(desktopDir, 'scripts', 'node-launcher.c'),
+        '/link',
+        '/SUBSYSTEM:CONSOLE',
+        `/MACHINE:${arch === 'x64' ? 'X64' : 'ARM64'}`,
+        `/OUT:${join(binDir, 'node.exe')}`,
+      ],
+      { cwd: buildDir, stdio: 'inherit' },
+    )
+  } finally {
+    rmSync(buildDir, { recursive: true, force: true })
+  }
+}
+
+/** 插件的 node/pnpm 命令始终转发到本次启动的 Electron。 */
+function writeCommandLaunchers(entry) {
+  if (platform === 'win32') {
+    buildWindowsLauncher()
     writeFileSync(
       join(binDir, 'pnpm.cmd'),
-      `@"%~dp0${nodeName}" "%~dp0..\\pnpm\\bin\\${entry}" %*\r\n`,
+      `@"%~dp0node.exe" "%~dp0..\\pnpm\\bin\\${entry}" %*\r\n`,
     )
   } else {
+    const flags = platform === 'darwin' ? ' --no-use-system-ca' : ''
+    writeFileSync(
+      join(binDir, 'node'),
+      `#!/bin/sh
+: "\${ELECTRON_NODE_EXEC_PATH:?DSH-Desktop Electron runtime is missing}"
+export ELECTRON_RUN_AS_NODE=1
+exec "$ELECTRON_NODE_EXEC_PATH"${flags} "$@"
+`,
+      { mode: 0o755 },
+    )
     writeFileSync(
       join(binDir, 'pnpm'),
       `#!/bin/sh
-exec "$(dirname "$0")/${nodeName}" "$(dirname "$0")/../pnpm/bin/${entry}" "$@"
+exec "$(dirname "$0")/node" "$(dirname "$0")/../pnpm/bin/${entry}" "$@"
 `,
+      { mode: 0o755 },
     )
-    chmodSync(join(binDir, 'pnpm'), 0o755)
   }
 }
 
 rmSync(target, { recursive: true, force: true })
 mkdirSync(binDir, { recursive: true })
 
-const nodeVersion = await latestNodeVersion()
-console.log(`[collect-runtime] node ${nodeVersion} (${nodeOs}-${arch})`)
-await fetchNode(nodeVersion)
-
 const pnpmVersion = await latestPnpmVersion()
 console.log(`[collect-runtime] pnpm ${pnpmVersion}`)
 await fetchPnpm(pnpmVersion)
 await fetchPnpmNativeBinary(pnpmVersion)
-writePnpmShim(resolvePnpmEntry())
+writeCommandLaunchers(resolvePnpmEntry())
 
 console.log(`[collect-runtime] done: ${target}`)

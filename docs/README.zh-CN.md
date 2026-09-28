@@ -8,7 +8,7 @@
 
 <h1 align="center">DSH-Desktop</h1>
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的 Electron 桌面外壳。内置 node + pnpm，把 `@deepseek-ai/dsh` 安装到 `~/.dsh/runtime`，并在浏览器窗口中运行 `dsh web` 界面。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的 Electron 桌面外壳。复用 Electron 内置 Node，通过随包 pnpm 把 `@deepseek-ai/dsh` 安装到 `~/.dsh/runtime`，并在浏览器窗口中运行 `dsh web` 界面。
 
 <p align="center">
   <img src="../public/desktop.png" alt="DSH-Desktop 界面截图" />
@@ -42,7 +42,8 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 
 ```
 Electron 主进程
-  ├─ 内置 node + pnpm（resources/runtime；开发时用仓库根目录 runtime/）
+  ├─ Electron 内置 Node（ELECTRON_RUN_AS_NODE）+ 随包 pnpm
+  ├─ node/pnpm 命令转发器（resources/runtime；开发时用仓库根目录 runtime/）
   ├─ 首次启动：pnpm 安装 @deepseek-ai/dsh → ~/.dsh/runtime（可升级）
   ├─ 启动 dsh web --host 127.0.0.1 --port <空闲端口>
   └─ BrowserWindow → http://127.0.0.1:<端口>
@@ -54,12 +55,12 @@ DSH 在运行时从 npm 安装，不随应用打包。升级 DSH = 启动时检�
 
 ```sh
 pnpm install
-pnpm collect      # 下载 node + pnpm 到 runtime/
+pnpm collect      # 收集 pnpm 和 Electron 命令转发器到 runtime/
 pnpm start        # 首次启动会安装 @deepseek-ai/dsh（约 1-2 分钟）
 pnpm dev          # start 的别名
 ```
 
-开发和打包行为完全一致：都用内置 node 和外部 `~/.dsh/runtime`。
+开发和打包都使用当前 Electron 可执行文件和外部 `~/.dsh/runtime`，不再下载或携带独立 Node。插件通过 PATH 找到轻量 `node` 转发器；Electron 路径在每次启动时传入，更新或移动应用后不会沿用旧路径。
 
 测试（不需要 Electron 窗口或浏览器）：
 
@@ -79,6 +80,8 @@ pnpm dist:mac     # macOS dmg + zip
 pnpm dist:win     # Windows nsis + zip（需在 Windows 上运行）
 ```
 
+打包时会重新收集 pnpm 和转发器。Windows 构建需要对应架构的 MSVC Native Tools 环境及 Windows SDK，用于编译小型 `node.exe` 转发器。
+
 macOS 产物未签名，Gatekeeper 会拦截首次启动。允许方式：
 
 ```sh
@@ -87,8 +90,14 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 
 ## 运行时依赖
 
-- node（最新）+ pnpm（最新），通过 `scripts/collect-runtime.mjs` 内置
+- Node 由 Electron 提供；pnpm（最新）和命令转发器由 `scripts/collect-runtime.mjs` 收集
 - `@deepseek-ai/dsh`（npm 最新版），安装到 `~/.dsh/runtime`
+
+## 后续更新 Electron
+
+升级时执行 `pnpm add -D -E electron@<版本>` 和 `pnpm check`，然后启动并验证打包后的应用。
+
+转发器和原生插件构建均使用当前 Electron 的路径与版本，并保持 `runAsNode` fuse 启用。DSH 可能不支持新的 Node/V8 组合，旧 ABI 插件也可能需要重编译，发布前仍应验证界面、终端和插件安装。DSH 与 CLI 共用安装目录，不应把整个共享运行时统一重编译为 Electron。
 
 ## 桌面插件 API
 
