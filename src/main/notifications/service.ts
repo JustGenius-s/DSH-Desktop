@@ -3,7 +3,12 @@
  * 不是席位——没有合并/重建，同 contributor+id 替换，窗口销毁或 close 即消失。
  */
 
-import { Notification, ipcMain, type WebContents } from 'electron'
+import {
+  Notification,
+  ipcMain,
+  type WebContents,
+  type WebContentsDidStartNavigationEventParams,
+} from 'electron'
 import {
   DESKTOP_ID_RE,
   type DesktopNotifyAction,
@@ -22,7 +27,10 @@ interface ActiveNote {
   contributor: string
   id: string
   wcId: number
-  notification: Notification
+  instanceId?: string
+  notification: Notification | null
+  bannerOpen: boolean
+  removeListeners: () => void
 }
 
 const active: ActiveNote[] = []
@@ -47,24 +55,39 @@ function sanitizeShow(raw: unknown): DesktopNotifySpec | null {
     title: obj.title,
     body: obj.body,
   }
+  if (obj.instanceId !== undefined) {
+    if (typeof obj.instanceId !== 'string' || !DESKTOP_ID_RE.test(obj.instanceId)) return null
+    spec.instanceId = obj.instanceId
+  }
   if (typeof obj.silent === 'boolean') spec.silent = obj.silent
   return spec
 }
 
-function drop(row: ActiveNote): void {
+function sendEvent(row: ActiveNote, channel: string): void {
+  const target = webContentsById(row.wcId)
+  if (target === undefined || target.isDestroyed()) return
+  const action: DesktopNotifyAction = { contributor: row.contributor, id: row.id }
+  if (row.instanceId !== undefined) action.instanceId = row.instanceId
+  target.send(channel, action)
+}
+
+function drop(row: ActiveNote, notify = true): void {
+  const idx = active.indexOf(row)
+  if (idx < 0) return
+  // 先释放所有权和事件，再调用可能同步触发 close 的原生 API。
+  active.splice(idx, 1)
+  row.removeListeners()
   try {
-    row.notification.close()
+    row.notification?.close()
   } catch {
     // 系统侧可能已经关掉。
   }
   closeBanner(bannerKey(row.wcId, row.contributor, row.id))
-  const idx = active.indexOf(row)
-  if (idx >= 0) active.splice(idx, 1)
+  if (notify) sendEvent(row, Ipc.notify.closed)
 }
 
 function closeMatching(wcId: number, contributor: string, id?: string): void {
-  for (let i = active.length - 1; i >= 0; i--) {
-    const row = active[i]
+  for (const row of [...active]) {
     if (row.wcId !== wcId || row.contributor !== contributor) continue
     if (id !== undefined && row.id !== id) continue
     drop(row)
@@ -72,16 +95,29 @@ function closeMatching(wcId: number, contributor: string, id?: string): void {
 }
 
 function closeWindow(wcId: number): void {
-  for (let i = active.length - 1; i >= 0; i--) {
-    if (active[i].wcId === wcId) drop(active[i])
+  for (const row of [...active]) {
+    if (row.wcId === wcId) drop(row, false)
   }
-  watchedWc.delete(wcId)
+  for (const key of lastShownId.keys()) {
+    if (key.startsWith(`${wcId}:`)) lastShownId.delete(key)
+  }
+  for (const key of lastNewIdAt.keys()) {
+    if (key.startsWith(`${wcId}:`)) lastNewIdAt.delete(key)
+  }
 }
 
 function watchSender(wc: WebContents): void {
   if (watchedWc.has(wc.id)) return
   watchedWc.add(wc.id)
-  wc.once('destroyed', () => closeWindow(wc.id))
+  const onNavigation = (details: WebContentsDidStartNavigationEventParams): void => {
+    if (details.isMainFrame && !details.isSameDocument) closeWindow(wc.id)
+  }
+  wc.on('did-start-navigation', onNavigation)
+  wc.once('destroyed', () => {
+    closeWindow(wc.id)
+    wc.removeListener('did-start-navigation', onNavigation)
+    watchedWc.delete(wc.id)
+  })
 }
 
 function countContributor(wcId: number, contributor: string): number {
@@ -132,42 +168,66 @@ function showNote(wc: WebContents, spec: DesktopNotifySpec): DesktopNotifyResult
   const row: ActiveNote = {
     contributor: spec.contributor,
     id: spec.id,
+    instanceId: spec.instanceId,
     wcId: wc.id,
     notification,
+    bannerOpen: true,
+    removeListeners: () => {
+      notification.removeListener('click', onAction)
+      notification.removeListener('close', onNativeClosed)
+      notification.removeListener('failed', onNativeFailed)
+    },
   }
   active.push(row)
 
-  const action: DesktopNotifyAction = { contributor: spec.contributor, id: spec.id }
-  notification.on('click', () => {
-    drop(row)
+  const onAction = (): void => {
+    if (!active.includes(row)) return
     focusMainWindow()
-    const target = webContentsById(wc.id)
-    if (target === undefined || target.isDestroyed()) return
-    target.send(Ipc.notify.action, action)
-  })
-  notification.on('close', () => {
-    const idx = active.indexOf(row)
-    if (idx >= 0) active.splice(idx, 1)
-  })
-  notification.on('failed', (event) => {
-    console.warn('[DSH-Desktop] notification failed', spec.contributor, spec.id, event)
-    const idx = active.indexOf(row)
-    if (idx >= 0) active.splice(idx, 1)
-  })
+    sendEvent(row, Ipc.notify.action)
+    drop(row)
+  }
+  const onNativeClosed = (): void => {
+    row.removeListeners()
+    row.notification = null
+    if (!row.bannerOpen) drop(row)
+  }
+  const onNativeFailed = (_event: unknown, error: string): void => {
+    console.warn('[DSH-Desktop] notification failed', spec.contributor, spec.id, error)
+    onNativeClosed()
+  }
+  notification.on('click', onAction)
+  notification.on('close', onNativeClosed)
+  notification.on('failed', onNativeFailed)
 
+  try {
+    showBannerOverlay(wc.id, spec, {
+      onAction,
+      onClosed: () => {
+        row.bannerOpen = false
+        if (row.notification === null) drop(row)
+      },
+    })
+  } catch (err) {
+    row.bannerOpen = false
+    console.warn('[DSH-Desktop] notification banner failed', err)
+  }
   try {
     notification.show()
   } catch (err) {
     console.warn('[DSH-Desktop] notification.show failed', err)
+    onNativeClosed()
   }
-  showBannerOverlay(wc, spec)
 
   console.log(`[DSH-Desktop] notify ${spec.contributor}:${spec.id}`)
-  return { shown: true }
+  return { shown: active.includes(row) }
 }
+
+let initialized = false
 
 /** 注册通知 IPC。必须在 loadURL 之前调用。 */
 export function setupDesktopNotify(): void {
+  if (initialized) return
+  initialized = true
   ipcMain.handle(Ipc.notify.show, (event, raw: unknown): DesktopNotifyResult => {
     const spec = sanitizeShow(raw)
     if (spec === null) {

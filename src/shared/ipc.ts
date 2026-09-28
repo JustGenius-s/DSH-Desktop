@@ -30,6 +30,7 @@ export const Ipc = {
     show: 'desktop:notify:show',
     close: 'desktop:notify:close',
     action: 'desktop:notify:action',
+    closed: 'desktop:notify:closed',
   },
   overlays: {
     open: 'desktop:overlays:open',

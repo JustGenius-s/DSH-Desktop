@@ -8,7 +8,6 @@ import type { ChildProcess } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { refreshDesktopSeats, refreshMenuLanguage, setupDesktopSeats } from './menus/seats'
-import { showTestBanner } from './notifications/banners'
 import { setupDesktopNotify } from './notifications/service'
 import {
   allowOverlays,
@@ -57,10 +56,9 @@ const isPrimaryInstance = app.isPackaged ? app.requestSingleInstanceLock() : tru
 if (!isPrimaryInstance) {
   app.quit()
 } else if (app.isPackaged) {
-  app.on('second-instance', (_event, argv) => {
+  app.on('second-instance', () => {
     // 二次启动退出后恢复已有实例的 Dock 图标和主窗口。
     enforceRegularDockPolicy()
-    if (argv.includes('--dsh-test-notify')) showTestBanner()
     focusMainWindow()
   })
 }
@@ -213,14 +211,7 @@ async function restartDshWebImpl(): Promise<void> {
 
       const win = mainWindow
       if (win !== null && !win.isDestroyed()) {
-        try {
-          await clearStaleDshAuthCookies()
-        } catch (error) {
-          console.warn(
-            '[DSH-Desktop] failed to clear stale DSH auth cookies before web reload',
-            error,
-          )
-        }
+        await clearStaleDshAuthCookies()
         await win.loadURL(result.launchUrl)
       }
     } finally {
@@ -250,11 +241,6 @@ app.whenReady().then(async () => {
   // 先改名，后面 setApplicationMenu 才显示 DSH-Desktop。
   app.setName('DSH-Desktop')
   await hardenChromiumStorage()
-  try {
-    await clearStaleDshAuthCookies()
-  } catch (error) {
-    console.warn('[DSH-Desktop] failed to clear stale DSH auth cookies', error)
-  }
 
   let port: number
   try {
@@ -311,8 +297,6 @@ app.whenReady().then(async () => {
       // 「零可见窗口」空档，否则 macOS 会把前台还给 Finder / 上一个前台 App，
       // 主窗口就会显示在别的窗口后面。
       focusWindow(win)
-      // focusWindow 的 restore 只针对最小化；确保展示时保持最大化状态。
-      if (!win.isMaximized()) win.maximize()
       // 首窗显示也是 Dock 瓷砖最容易被系统压掉的时刻；show 之后立刻拉回。
       enforceRegularDockPolicy()
       if (!splash.isDestroyed()) splash.close()
@@ -332,9 +316,6 @@ app.whenReady().then(async () => {
 
   // 启动后自动查一轮更新；不阻塞窗口出现，网络失败静默。
   void checkDesktopUpdates()
-
-  // 启动守卫会覆盖这段窗口期；再留一次显式断言兜底。
-  setTimeout(() => enforceRegularDockPolicy(), 10_000)
 })
 
 app.on('activate', () => {

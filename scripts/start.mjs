@@ -3,10 +3,12 @@ import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-// 在 Electron 启动前设置 TLS 兼容选项，保留调用方的其他 Node 参数。
+// macOS 在 Electron 启动前设置 TLS 兼容选项，保留调用方的其他 Node 参数。
 const env = {
   ...process.env,
-  NODE_OPTIONS: [process.env.NODE_OPTIONS, '--no-use-system-ca'].filter(Boolean).join(' '),
+  ...(process.platform === 'darwin' && {
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, '--no-use-system-ca'].filter(Boolean).join(' '),
+  }),
 }
 const child = spawn(electronPath, [root, ...process.argv.slice(2)], {
   cwd: root,

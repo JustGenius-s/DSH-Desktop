@@ -6,8 +6,6 @@
  */
 
 import { app, session } from 'electron'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { compareVersions } from '../../shared/version'
 
 /**
@@ -29,20 +27,6 @@ export interface AppUpdateInfo {
 /** 去掉版本号前可能带的 `v`（tag 常写成 v0.1.0）。 */
 function normalizeVersion(v: string): string {
   return v.replace(/^[vV]/, '')
-}
-
-/** 兼容旧版永久「不再提示」的标记文件，尊重老用户的选择。 */
-function skipFilePath(): string {
-  return join(app.getPath('userData'), 'app-update-skip.json')
-}
-
-function legacyDismissed(): boolean {
-  try {
-    const obj = JSON.parse(readFileSync(skipFilePath(), 'utf8')) as { dismissed?: unknown }
-    return obj.dismissed === true
-  } catch {
-    return false
-  }
 }
 
 /** 查 GitHub 最新发布；网络失败 / 无 release（404）/ 非预期响应都静默返回 undefined。 */
@@ -72,9 +56,8 @@ async function latestAppRelease(): Promise<{ version: string; url: string } | un
   }
 }
 
-/** 检测是否有比当前更新的版本；老用户曾选「不再提示」、没有更新或失败返回 undefined。 */
+/** 检测是否有比当前更新的版本；没有更新或失败返回 undefined。 */
 export async function checkForAppUpdate(): Promise<AppUpdateInfo | undefined> {
-  if (legacyDismissed()) return undefined
   const release = await latestAppRelease()
   if (release === undefined) return undefined
 

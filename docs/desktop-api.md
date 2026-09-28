@@ -119,10 +119,16 @@ await desktop.notify.close('desktop-update') // 该 contributor 全部
 - 每个 contributor 最多 3 条同时存在；新 id 间隔至少 10 秒
 - 标题最长 80，正文最长 240
 - 插件卸载时应 `close(contributor)`
+- `onClosed(listener)` 在通知结束（系统提示与壳内横幅均关闭）、主动关闭或被替换时回调；返回取消订阅函数
+- 高频替换同一 `id` 时可传 `instanceId`（与 `id` 相同的格式限制），`onAction` / `onClosed` 会原样带回，便于忽略旧实例的迟到事件
+- 页面整页导航或窗口销毁时，主进程释放该页面的通知、横幅和限流记录
 
 macOS 打包包在 `Info.plist` 里声明了 `NSUserNotificationAlertStyle=alert`。开发态 `pnpm start` 走 Electron 二进制，通知可能显示为 Electron，系统也可能先问权限。
 
 网页里的 `new Notification()`（例如 `dsh-notification` 插件）由主窗口 preload 接到本族原生通知。Chromium 自己的 Notification API 在桌面壳里会显示已授权、却不向系统申请 UNUserNotificationCenter，横幅被静默丢掉。
+
+通知桥在每次页面加载时由 preload 安装；关闭、失败及替换后的实例会释放。
+`Notification.requestPermission()` 仅查询桥接权限。
 
 ## `overlays`
 

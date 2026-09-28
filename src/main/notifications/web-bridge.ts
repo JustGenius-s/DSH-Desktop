@@ -1,11 +1,10 @@
-import type { BrowserWindow, WebContents } from 'electron'
 import { MAX_BODY, MAX_TITLE, WEB_NOTIFICATION_CONTRIBUTOR } from './constants'
 
 /**
  * 将网页 Notification 接入桌面通知桥，统一使用主进程的原生通知和横幅。
  * Chromium 的权限状态不代表系统已授权；系统通知能否展示仍取决于系统设置。
  */
-const WEB_NOTIFICATION_BRIDGE = `(() => {
+export const WEB_NOTIFICATION_BRIDGE = `(() => {
   if (window.__dshNotifyBridge) return
   const desktop = window.dshDesktop
   if (desktop === undefined || desktop.notify === undefined) return
@@ -13,23 +12,17 @@ const WEB_NOTIFICATION_BRIDGE = `(() => {
 
   const CONTRIBUTOR = ${JSON.stringify(WEB_NOTIFICATION_CONTRIBUTOR)}
   const instances = new Map()
+  let sequence = 0
+  const nextInstanceId = () => 'n' + Date.now() + '-' + (++sequence)
 
   function toId(tag) {
-    const raw = String(tag || ('n' + Date.now())).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 64)
+    const raw = String(tag).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 64)
     return /^[A-Za-z0-9]/.test(raw) ? raw : ('n' + raw).slice(0, 64)
   }
 
   class DesktopNotification {
     static get permission() { return 'granted' }
-    static requestPermission() {
-      void desktop.notify.show({
-        contributor: CONTRIBUTOR,
-        id: toId('permission-' + Date.now()),
-        title: 'DSH-Desktop',
-        body: '通知已接通',
-      })
-      return Promise.resolve('granted')
-    }
+    static requestPermission() { return Promise.resolve('granted') }
     static get maxActions() { return 0 }
     constructor(title, options) {
       const opts = options === undefined || options === null ? {} : options
@@ -40,29 +33,50 @@ const WEB_NOTIFICATION_BRIDGE = `(() => {
       this.onshow = null
       this.onerror = null
       this.onclose = null
-      this._id = toId(opts.tag)
+      this._closed = false
+      this._instanceId = nextInstanceId()
+      this._id = toId(opts.tag || this._instanceId)
+      const previous = instances.get(this._id)
       instances.set(this._id, this)
+      if (previous !== undefined) previous._finish('close')
+      if (instances.get(this._id) !== this) return
       const shownTitle = this.title.slice(0, ${MAX_TITLE}) || 'DSH'
       const shownBody = (this.body === '' ? ' ' : this.body).slice(0, ${MAX_BODY})
       void desktop.notify.show({
         contributor: CONTRIBUTOR,
         id: this._id,
+        instanceId: this._instanceId,
         title: shownTitle,
         body: shownBody,
         silent: opts.silent === true,
       }).then((result) => {
+        if (instances.get(this._id) !== this) return
         if (result !== undefined && result.shown === true) {
-          if (typeof this.onshow === 'function') this.onshow(new Event('show'))
-        } else if (typeof this.onerror === 'function') {
-          this.onerror(new Event('error'))
+          this._dispatch('show')
+        } else {
+          this._finish('error')
         }
-      }).catch(() => {
-        if (typeof this.onerror === 'function') this.onerror(new Event('error'))
-      })
+      }).catch(() => this._finish('error'))
+    }
+    _dispatch(type) {
+      const listener = this['on' + type]
+      if (typeof listener !== 'function') return
+      try {
+        listener.call(this, new Event(type))
+      } catch (error) {
+        window.reportError(error)
+      }
+    }
+    _finish(type) {
+      if (this._closed) return
+      this._closed = true
+      if (instances.get(this._id) === this) instances.delete(this._id)
+      this._dispatch(type)
     }
     close() {
-      void desktop.notify.close(CONTRIBUTOR, this._id)
-      if (typeof this.onclose === 'function') this.onclose(new Event('close'))
+      if (this._closed || instances.get(this._id) !== this) return
+      void desktop.notify.close(CONTRIBUTOR, this._id).catch(() => {})
+      this._finish('close')
     }
     addEventListener(type, fn) {
       if (type === 'click') this.onclick = fn
@@ -78,25 +92,24 @@ const WEB_NOTIFICATION_BRIDGE = `(() => {
     }
   }
 
-  desktop.notify.onAction((action) => {
+  function findInstance(action) {
     if (action.contributor !== CONTRIBUTOR) return
     const inst = instances.get(action.id)
-    if (inst !== undefined && typeof inst.onclick === 'function') inst.onclick(new Event('click'))
+    return inst !== undefined && inst._instanceId === action.instanceId ? inst : undefined
+  }
+  desktop.notify.onAction((action) => {
+    const inst = findInstance(action)
+    if (inst === undefined) return
+    try {
+      inst._dispatch('click')
+    } finally {
+      inst._finish('close')
+    }
+  })
+  desktop.notify.onClosed((action) => {
+    const inst = findInstance(action)
+    if (inst !== undefined) inst._finish('close')
   })
 
   window.Notification = DesktopNotification
 })()`
-
-function injectWebNotificationBridge(wc: WebContents): void {
-  if (wc.isDestroyed()) return
-  void wc.executeJavaScript(WEB_NOTIFICATION_BRIDGE).catch((err: unknown) => {
-    console.warn('[DSH-Desktop] inject web notification bridge failed', err)
-  })
-}
-
-/** 主窗口每次整页加载后把网页 Notification 接到原生桥。 */
-export function installWebNotificationBridge(win: BrowserWindow): void {
-  const inject = () => injectWebNotificationBridge(win.webContents)
-  win.webContents.on('dom-ready', inject)
-  win.webContents.on('did-finish-load', inject)
-}

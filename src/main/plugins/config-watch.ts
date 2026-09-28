@@ -71,10 +71,7 @@ async function checkAndOffer(): Promise<void> {
   dialogOpen = true
   try {
     const restarted = await offerRestartDshWeb('plugin')
-    if (restarted) {
-      // 热重启成功后由 markPluginConfigApplied 刷新指纹；这里兜底一次。
-      markPluginConfigApplied()
-    } else {
+    if (!restarted) {
       // 稍后 / 失败：同一指纹不再弹，直到再改一次。
       dismissedFingerprint = next
     }

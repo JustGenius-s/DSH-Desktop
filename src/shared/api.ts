@@ -121,6 +121,8 @@ export interface DshDesktopSeats {
 export interface DesktopNotifySpec {
   contributor: string
   id: string
+  /** 可选实例标识，用来区分同一 id 被替换前后的生命周期事件。 */
+  instanceId?: string
   title: string
   body: string
   silent?: boolean
@@ -129,6 +131,7 @@ export interface DesktopNotifySpec {
 export interface DesktopNotifyAction {
   contributor: string
   id: string
+  instanceId?: string
 }
 
 export interface DesktopNotifyResult {
@@ -145,6 +148,8 @@ export interface DshDesktopNotify {
   close(contributor: string, id?: string): Promise<void>
   /** 用户点击通知时回传 contributor+id；主进程同时前置窗口。 */
   onAction(listener: (action: DesktopNotifyAction) => void): () => void
+  /** 通知的系统提示和壳内横幅均结束时回传；被同 id 替换时也会结束。 */
+  onClosed(listener: (action: DesktopNotifyAction) => void): () => void
 }
 
 // ---------------------------------------------------------------------------
@@ -249,8 +254,6 @@ export interface DesktopPluginInfo {
   core: boolean
   /** 疑似导致本次启动失败的元凶（高亮，不自动禁用）。 */
   suspected: boolean
-  /** 是否属于旧版桌面内置插件，保留该标记以兼容恢复页。 */
-  desktopOwned: boolean
 }
 
 /** 启动失败归因结果：故障摘要 + 疑似元凶 bundle 列表。 */

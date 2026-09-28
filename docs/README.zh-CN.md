@@ -20,6 +20,8 @@
 
 ### macOS
 
+需要 macOS 13（Ventura）或更高版本。
+
 1. 从最新 release 下载 `DSH-Desktop-*.dmg`。
 2. 打开 `.dmg`，把 `DSH-Desktop.app` 拖进 `/Applications`。
 3. 应用未签名，Gatekeeper 会拦截首次启动。右键应用 → **打开** 并确认，或运行：
@@ -29,6 +31,8 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 ```
 
 ### Windows
+
+需要 64 位 Windows。
 
 1. 从最新 release 下载 `DSH-Desktop Setup *.exe`（安装包）或 `DSH-Desktop-*-win.zip`（便携版）。
 2. 运行安装包，或解压后启动 `DSH-Desktop.exe`。

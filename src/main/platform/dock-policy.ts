@@ -5,7 +5,7 @@
  * build/icon-mac.png 生成（画布 1024、内容 856，约 83.5%，与系统 App 的 squircle 一致）。
  * 全铺满的 icon-app.png 会让图标比旁边的 App 大一圈；不要拿它去 dock.setIcon。
  *
- * dock.setIcon 仍用 PNG：Electron 43 的 createFromPath(icns) 可能返回 empty。
+ * dock.setIcon 使用打包资源或开发目录中的 PNG，首次成功加载后复用 NativeImage。
  * 不要 dock.hide()：hide 之后 show 会按 bundle icns 重建瓷砖，自定义 setIcon 会被冲掉。
  * 不要在 /Applications 留同 bundle id 的 .bak。
  *
@@ -14,76 +14,65 @@
  */
 
 import { app, nativeImage, type NativeImage } from 'electron'
-import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 let guardTimer: ReturnType<typeof setInterval> | null = null
 let kickTimers: ReturnType<typeof setTimeout>[] = []
-let lastIconAppliedAt = 0
-
-function dockIconCandidates(): string[] {
-  return [
-    join(process.resourcesPath, 'dock-icon.png'),
-    join(app.getAppPath(), 'build', 'icon-mac.png'),
-    join(process.resourcesPath, 'icon.icns'),
-  ]
-}
+let dockImage: NativeImage | null = null
+let showInProgress = false
 
 function loadDockImage(): NativeImage | null {
-  for (const path of dockIconCandidates()) {
-    if (!existsSync(path)) continue
-    let image = nativeImage.createFromPath(path)
-    if (image.isEmpty()) {
-      try {
-        image = nativeImage.createFromBuffer(readFileSync(path))
-      } catch {
-        continue
-      }
-    }
-    if (!image.isEmpty()) return image
-  }
-  return null
+  if (dockImage !== null) return dockImage
+  const path = app.isPackaged
+    ? join(process.resourcesPath, 'dock-icon.png')
+    : join(app.getAppPath(), 'build', 'icon-mac.png')
+  const image = nativeImage.createFromPath(path)
+  if (image.isEmpty()) return null
+  dockImage = image
+  return image
 }
 
-function applyDockIcon(force = false): void {
+function applyDockIcon(): void {
   const dock = app.dock
   if (dock === undefined) return
-  const now = Date.now()
-  if (!force && now - lastIconAppliedAt < 1000) return
   const image = loadDockImage()
   if (image === null) return
   dock.setIcon(image)
-  lastIconAppliedAt = now
 }
 
-function showAndStamp(): void {
+async function showAndStamp(): Promise<void> {
   const dock = app.dock
-  if (dock === undefined) return
-  app.setActivationPolicy('regular')
-  applyDockIcon(true)
-  void dock
-    .show()
-    .then(() => applyDockIcon(true))
-    .catch(() => {})
+  if (dock === undefined || showInProgress) return
+  showInProgress = true
+  try {
+    app.setActivationPolicy('regular')
+    applyDockIcon()
+    await dock.show()
+    applyDockIcon()
+  } catch {
+    // macOS 切换激活策略时可能尚未能显示 Dock；由后续守卫重试。
+  } finally {
+    showInProgress = false
+  }
 }
 
 export function enforceRegularDockPolicy(): void {
   if (process.platform !== 'darwin') return
-  showAndStamp()
+  void showAndStamp()
 }
 
 export function startDockPolicyGuard(): void {
   if (process.platform !== 'darwin') return
   stopDockPolicyGuard()
-  showAndStamp()
+  void showAndStamp()
+  // 启动窗口与浮窗会改变 macOS 的激活状态，保留有限次数的启动补设。
   for (const ms of [1200, 3000, 6000]) {
-    kickTimers.push(setTimeout(() => showAndStamp(), ms))
+    kickTimers.push(setTimeout(() => void showAndStamp(), ms))
   }
   guardTimer = setInterval(() => {
     const dock = app.dock
     if (dock === undefined) return
-    applyDockIcon()
-    if (!dock.isVisible()) showAndStamp()
+    if (!dock.isVisible()) void showAndStamp()
   }, 500)
 }
 

@@ -1,7 +1,6 @@
 /** 主窗口的原生外观、导航规则和页面集成；应用编排通过回调接入。 */
 import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'node:path'
-import { installWebNotificationBridge } from '../notifications/web-bridge'
 import { enforceRegularDockPolicy } from '../platform/dock-policy'
 import { preloadPath } from '../platform/paths'
 import { setWindowRole } from './registry'
@@ -61,6 +60,8 @@ function defaultMainBounds(): { x: number; y: number; width: number; height: num
 export function createMainWindow(url: string, options: MainWindowOptions): BrowserWindow {
   const { x, y, width, height } = defaultMainBounds()
   const win = new BrowserWindow({
+    name: 'dsh-main',
+    windowStatePersistence: true,
     x,
     y,
     width,
@@ -84,8 +85,7 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
 
   setWindowRole(win, 'main')
   win.setMenuBarVisibility(false)
-  // 首启最大化；默认 bounds 留作窗口还原时使用。
-  win.maximize()
+  // Electron 恢复已保存的尺寸、位置和显示状态；首次启动采用上面的默认 bounds。
   win.once('ready-to-show', () => options.onReady(win))
   win.on('closed', () => options.onClosed(win))
   // DSH 网页加载完成后注入顶部拖拽条与红绿灯避让样式（隐藏原生标题栏后必需）。
@@ -116,9 +116,6 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
     event.preventDefault()
     if (!openInDefaultBrowser(url)) console.warn(`[DSH-Desktop] 已拦截跨源导航：${url}`)
   })
-  // 必须在 loadURL 之前挂上：网页 Notification 接到原生桥，否则插件测试按钮
-  // 会走 Chromium 那条「已授权但系统没问过」的静默丢弃路径。
-  installWebNotificationBridge(win)
   void win.loadURL(url)
   return win
 }

@@ -10,14 +10,9 @@
 import https from 'node:https'
 import tls from 'node:tls'
 
-const setDefault = (tls as { setDefaultCACertificates?: (certs: readonly string[]) => void })
-  .setDefaultCACertificates
-
 if (process.platform === 'darwin') {
   const ca = [...tls.rootCertificates]
-  if (typeof setDefault === 'function') {
-    setDefault(ca)
-  }
+  tls.setDefaultCACertificates(ca)
   https.globalAgent.options.ca = ca
   const original = tls.createSecureContext.bind(tls)
   tls.createSecureContext = ((options?: tls.SecureContextOptions) =>

@@ -13,8 +13,7 @@ vi.mock('electron', () => ({ app: {}, BrowserWindow: class {}, ipcMain: ipc }))
 vi.mock('../src/main/plugins/quarantine', () => ({
   extractFailedPlugins: () => ['example-plugin'],
   getProfileBundles: () => ['example-plugin'],
-  listPlugins: () => [{ name: 'example-plugin', enabled: true, core: false, desktopOwned: false }],
-  clearQuarantine: vi.fn(),
+  listPlugins: () => [{ name: 'example-plugin', enabled: true, core: false }],
   setBundleEnabled: vi.fn(),
 }))
 
@@ -31,9 +30,7 @@ test('recovery IPC can be initialized twice without duplicating handlers or losi
   recordBootFailure('Error: example-plugin failed')
   expect(() => setupPluginRecovery()).not.toThrow()
   expect(ipc.handlers.get(Ipc.plugins.list)?.()).toEqual({
-    plugins: [
-      { name: 'example-plugin', enabled: true, core: false, desktopOwned: false, suspected: true },
-    ],
+    plugins: [{ name: 'example-plugin', enabled: true, core: false, suspected: true }],
     failure: { tail: 'Error: example-plugin failed', suspected: ['example-plugin'] },
   })
   expect(ipc.on).toHaveBeenCalledTimes(1)

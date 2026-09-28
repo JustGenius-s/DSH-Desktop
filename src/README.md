@@ -53,11 +53,17 @@ src/
 
 `preload.ts` 保持独立：沙箱中的 `require` 不能加载本地模块。它只在运行时
 导入 `electron`，共享契约使用 `import type`；内联 IPC 常量由 `satisfies`
-检查一致性。网页通知脚本在 preload 和主进程各保留一份，分别用于首次注入及
-整页加载后的补注入，拆文件时不能直接给 preload 添加普通本地导入。
+检查一致性。网页通知脚本由 `notifications/web-bridge.ts` 维护唯一实现，构建时
+内联到 preload；首次加载和整页导航均由 preload 安装，不再由主进程重复注入。
+不能直接给 preload 添加普通本地导入。构建会校验内联占位符，漏掉这一步的裸
+`tsc` 输出不能用于运行。
 
 所有需要 preload 的窗口统一使用 `platform/paths.ts`，定位应用根目录下的
 `dist/preload.js`，不依赖功能模块自身的 `__dirname`。应用入口仍是 `dist/main.js`。
+
+主窗口以固定名称 `dsh-main` 使用 Electron 的窗口状态持久化；首次采用默认尺寸，
+之后恢复用户的尺寸、位置和显示状态，不额外强制最大化。浮窗使用独立缩放模式，
+与主窗口共用会话但不共享页面缩放。
 
 ## 验证
 

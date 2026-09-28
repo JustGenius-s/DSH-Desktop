@@ -1,11 +1,10 @@
 /**
  * 插件故障归因与启用状态管理。启动失败只提供疑似插件，由用户在恢复页
- * 决定启用/禁用；旧版桌面内置插件的选择仍记入 quarantined-plugins.json。
+ * 决定启用/禁用，并直接更新 web profile 的 bundles。
  *
  * 核心 bundle 不允许禁用。无法归因时返回空列表，恢复页仍展示原始错误。
  */
 
-import { app } from 'electron'
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { dshHome } from '../runtime/paths'
@@ -13,18 +12,8 @@ import { dshHome } from '../runtime/paths'
 /** 核心 bundle：禁用后 dsh 必然无法启动，永不隔离。 */
 const CORE_BUNDLES = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
 
-interface QuarantineRecord {
-  name: string
-  disabledAt: string
-  errorSummary: string
-}
-
 function profilePackagePath(): string {
   return join(dshHome(), 'profiles', 'web', 'package.json')
-}
-
-function quarantineFilePath(): string {
-  return join(app.getPath('userData'), 'quarantined-plugins.json')
 }
 
 /** 当前 web profile 登记的 bundle 列表；读不到返回空数组。 */
@@ -122,36 +111,9 @@ export function extractFailedPlugins(output: string, bundles: string[]): string[
   return [...found].filter((n) => thirdParty.includes(n))
 }
 
-function readQuarantine(): QuarantineRecord[] {
-  try {
-    const data: unknown = JSON.parse(readFileSync(quarantineFilePath(), 'utf8'))
-    if (!Array.isArray(data)) return []
-    return data.filter(
-      (r): r is QuarantineRecord =>
-        typeof r === 'object' && r !== null && typeof (r as QuarantineRecord).name === 'string',
-    )
-  } catch {
-    return []
-  }
-}
-
-function writeQuarantine(records: QuarantineRecord[]): void {
-  try {
-    writeFileSync(quarantineFilePath(), JSON.stringify(records, null, 2) + '\n')
-  } catch (err) {
-    console.warn('[DSH-Desktop] 写入隔离记录失败:', err)
-  }
-}
-
-/** 清空全部隔离记录（保持 bundles 现状，不重新启用任何插件）。 */
-export function clearQuarantine(): void {
-  writeQuarantine([])
-}
-
 /**
  * 启用/禁用一个 bundle：启用时追加到 bundles 末尾（依赖里的 link: 条目保留，
  * 便于恢复时无需重建链接），禁用时从 bundles 摘除。核心 bundle 拒绝。
- * 同步旧版桌面内置插件的隔离记录，保留已有恢复数据的兼容性。
  * 已处于目标状态时也返回 ok，不重复写入 profile。
  */
 export function setBundleEnabled(name: string, enabled: boolean): { ok: boolean; error?: string } {
@@ -169,11 +131,9 @@ export function setBundleEnabled(name: string, enabled: boolean): { ok: boolean;
     } else if (!enabled && present) {
       pkg.dsh.profile.bundles = names.filter((b) => b !== name)
     } else {
-      syncLegacyDisabledRecord(name, enabled)
       return { ok: true } // 已是目标状态，无写入。
     }
     writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + '\n')
-    syncLegacyDisabledRecord(name, enabled)
     return { ok: true }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
@@ -182,39 +142,17 @@ export function setBundleEnabled(name: string, enabled: boolean): { ok: boolean;
   }
 }
 
-/** 旧版曾内置的 bundle；保留恢复入口，当前更新功能已由主进程提供。 */
-const LEGACY_DESKTOP_BUNDLES = new Set(['@just-genius/dsh-desktop-update'])
-
-/** 同步旧版桌面内置插件的禁用记录。 */
-function syncLegacyDisabledRecord(name: string, enabled: boolean): void {
-  if (!LEGACY_DESKTOP_BUNDLES.has(name)) return
-  const records = readQuarantine().filter((r) => r.name !== name)
-  if (!enabled) {
-    records.push({
-      name,
-      disabledAt: new Date().toISOString(),
-      errorSummary: '用户已在插件列表禁用',
-    })
-  }
-  writeQuarantine(records)
-}
-
-/**
- * 插件清单视图：bundles 里的是启用态；旧版桌面插件即使不在 bundles 里
- * 也列出（禁用态），让用户能重新启用。核心 bundle 恒在列表并锁定。
- */
+/** 插件清单视图：列出当前 profile 的 bundles，核心 bundle 恒在列表并锁定。 */
 export function listPlugins(): {
   name: string
   enabled: boolean
   core: boolean
-  desktopOwned: boolean
 }[] {
   const bundles = getProfileBundles()
-  const names = new Set<string>([...CORE_BUNDLES, ...bundles, ...LEGACY_DESKTOP_BUNDLES])
+  const names = new Set<string>([...CORE_BUNDLES, ...bundles])
   return [...names].map((name) => ({
     name,
     enabled: bundles.includes(name),
     core: CORE_BUNDLES.has(name),
-    desktopOwned: LEGACY_DESKTOP_BUNDLES.has(name),
   }))
 }

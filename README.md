@@ -20,6 +20,8 @@ Prebuilt packages are published on [GitHub Releases](https://github.com/JustGeni
 
 ### macOS
 
+Requires macOS 13 (Ventura) or later.
+
 1. Download `DSH-Desktop-*.dmg` from the latest release.
 2. Open the `.dmg` and drag `DSH-Desktop.app` into `/Applications`.
 3. The app is unsigned, so Gatekeeper blocks the first launch. Right-click the app → **Open** and confirm, or run:
@@ -29,6 +31,8 @@ xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 ```
 
 ### Windows
+
+Requires 64-bit Windows.
 
 1. Download `DSH-Desktop Setup *.exe` (installer) or `DSH-Desktop-*-win.zip` (portable) from the latest release.
 2. Run the installer, or unzip the archive and launch `DSH-Desktop.exe`.

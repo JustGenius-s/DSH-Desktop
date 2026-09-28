@@ -54,7 +54,8 @@ test('start forwards arguments, preserves Node options, and returns the applicat
   assert.deepEqual(JSON.parse(result.stdout), {
     args: ['--flag', 'two words'],
     cwd: root,
-    nodeOptions: '--no-warnings --no-use-system-ca',
+    nodeOptions:
+      process.platform === 'darwin' ? '--no-warnings --no-use-system-ca' : '--no-warnings',
   })
 })
 

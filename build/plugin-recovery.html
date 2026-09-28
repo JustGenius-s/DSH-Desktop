@@ -95,7 +95,6 @@
       color: #9aa4b0;
     }
     .badge.core { background: rgba(83, 141, 202, .16); color: #9cc4ef; }
-    .badge.own { background: rgba(112, 174, 110, .14); color: #a9d6a5; }
     .badge.sus {
       background: rgba(210, 90, 80, .18);
       color: #f0b6ae;
@@ -196,7 +195,6 @@
 
     let plugins = []
     let failure = null
-    let changed = new Set()
 
     function render() {
       const list = document.getElementById('list')
@@ -215,7 +213,6 @@
         const badges = document.createElement('div')
         badges.className = 'badges'
         if (p.core) badges.appendChild(badge('核心，不可禁用', 'core'))
-        if (p.desktopOwned) badges.appendChild(badge('桌面端插件', 'own'))
         if (p.suspected) badges.appendChild(badge('疑似元凶', 'sus'))
         const state = document.createElement('span')
         state.className = 'badge ' + (p.enabled ? '' : 'off')

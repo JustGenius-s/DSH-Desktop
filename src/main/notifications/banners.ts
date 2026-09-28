@@ -1,9 +1,11 @@
-/** 原生通知的壳内横幅，以及二次启动的通知自检入口。 */
-import { BrowserWindow, screen, type WebContents } from 'electron'
+/** 原生通知的壳内横幅。 */
+import {
+  BrowserWindow,
+  screen,
+  type Event,
+  type WebContentsWillNavigateEventParams,
+} from 'electron'
 import type { DesktopNotifySpec } from '../../shared/api'
-import { Ipc } from '../../shared/ipc'
-import { focusMainWindow, webContentsById } from '../windows/registry'
-import { WEB_NOTIFICATION_CONTRIBUTOR } from './constants'
 
 function escapeHtml(s: string): string {
   return s
@@ -13,22 +15,27 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-const bannerWindows = new Map<string, BrowserWindow>()
+interface Banner {
+  close: () => void
+}
+
+const bannerWindows = new Map<string, Banner>()
 
 export function bannerKey(wcId: number, contributor: string, id: string): string {
   return `${wcId}:${contributor}:${id}`
 }
 
 export function closeBanner(key: string): void {
-  const win = bannerWindows.get(key)
-  if (win === undefined) return
-  bannerWindows.delete(key)
-  if (!win.isDestroyed()) win.close()
+  bannerWindows.get(key)?.close()
 }
 
 /** 壳内横幅：在系统通知未展示时仍提供可点击的提示。 */
-export function showBannerOverlay(wc: WebContents, spec: DesktopNotifySpec): void {
-  const key = bannerKey(wc.id, spec.contributor, spec.id)
+export function showBannerOverlay(
+  wcId: number,
+  spec: DesktopNotifySpec,
+  callbacks: { onAction: () => void; onClosed: () => void },
+): void {
+  const key = bannerKey(wcId, spec.contributor, spec.id)
   closeBanner(key)
 
   const display = screen.getPrimaryDisplay()
@@ -55,8 +62,8 @@ export function showBannerOverlay(wc: WebContents, spec: DesktopNotifySpec): voi
       nodeIntegration: false,
     },
   })
+  const bannerContents = win.webContents
   if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'screen-saver')
-  bannerWindows.set(key, win)
 
   const title = escapeHtml(spec.title)
   const body = escapeHtml(spec.body)
@@ -68,33 +75,46 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 </style></head><body><div class="b" id="b"><div class="t">${title}</div><div class="d">${body}</div></div>
 <script>document.getElementById('b').addEventListener('click',function(){location.href='dsh-notify://click'})</script></body></html>`
 
-  win.webContents.on('will-navigate', (event, url) => {
+  let closed = false
+  const cleanup = (): void => {
+    if (closed) return
+    closed = true
+    clearTimeout(timer)
+    if (!bannerContents.isDestroyed()) bannerContents.removeListener('will-navigate', onNavigate)
+    win.removeListener('ready-to-show', onReady)
+    win.removeListener('closed', cleanup)
+    if (bannerWindows.get(key) === banner) bannerWindows.delete(key)
+    callbacks.onClosed()
+  }
+  const banner: Banner = {
+    close: () => {
+      if (closed) return
+      cleanup()
+      if (!win.isDestroyed()) win.close()
+    },
+  }
+  const onNavigate = (event: Event<WebContentsWillNavigateEventParams>): void => {
     event.preventDefault()
-    if (url.startsWith('dsh-notify://')) {
-      closeBanner(key)
-      focusMainWindow()
-      const target = webContentsById(wc.id)
-      if (target !== undefined && !target.isDestroyed()) {
-        target.send(Ipc.notify.action, { contributor: spec.contributor, id: spec.id })
-      }
+    if (event.url !== 'dsh-notify://click') return
+    try {
+      callbacks.onAction()
+    } finally {
+      banner.close()
     }
-  })
-  win.on('closed', () => {
-    bannerWindows.delete(key)
-  })
-  void win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
-  win.once('ready-to-show', () => {
-    if (!win.isDestroyed()) win.showInactive()
-  })
-  setTimeout(() => closeBanner(key), 6000)
-}
-
-/** 给二次启动 `--dsh-test-notify` 用：不经过网页。 */
-export function showTestBanner(): void {
-  showBannerOverlay({ id: 0 } as WebContents, {
-    contributor: WEB_NOTIFICATION_CONTRIBUTOR,
-    id: 'agent-test',
-    title: 'DSH-Desktop',
-    body: '测试横幅',
-  })
+  }
+  const onReady = (): void => {
+    if (!closed && !win.isDestroyed()) win.showInactive()
+  }
+  // 计时器和监听器属于具体窗口；同 id 替换后，旧窗口不能关闭或移除新窗口。
+  const timer = setTimeout(banner.close, 6000)
+  bannerWindows.set(key, banner)
+  bannerContents.on('will-navigate', onNavigate)
+  win.once('closed', cleanup)
+  win.once('ready-to-show', onReady)
+  void win
+    .loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+    .catch((err: unknown) => {
+      console.warn('[DSH-Desktop] notification banner failed', err)
+      banner.close()
+    })
 }

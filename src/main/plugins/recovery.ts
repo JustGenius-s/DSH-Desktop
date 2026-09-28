@@ -16,7 +16,6 @@ import { Ipc } from '../../shared/ipc'
 import { preloadPath } from '../platform/paths'
 import { setWindowRole } from '../windows/registry'
 import {
-  clearQuarantine,
   extractFailedPlugins,
   getProfileBundles,
   listPlugins,
@@ -85,7 +84,6 @@ export function setupPluginRecovery(): void {
     return setBundleEnabled(name, enabled)
   })
   ipcMain.handle(Ipc.plugins.clearFailure, () => {
-    clearQuarantine()
     bootFailure = null
   })
   ipcMain.on(Ipc.plugins.relaunch, () => {
