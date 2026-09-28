@@ -26,6 +26,7 @@
     "@types/node": "^22.0.0",
     "electron": "45.0.0-alpha.6",
     "electron-builder": "^26.15.3",
+    "esbuild": "0.28.2",
     "prettier": "3.9.9",
     "typescript": "^6.0.3",
     "vitest": "^3.2.7"
@@ -43,6 +44,8 @@
       "build/icon-mac.png",
       "build/icon.png",
       "build/splash.html",
+      "build/shell.css",
+      "build/whale.svg",
       "build/plugin-recovery.html"
     ],
     "extraResources": [

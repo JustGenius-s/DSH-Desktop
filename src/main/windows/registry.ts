@@ -5,7 +5,7 @@
 
 import { app, BrowserWindow, type WebContents } from 'electron'
 
-export type WindowRole = 'main' | 'splash' | 'overlay'
+export type WindowRole = 'main' | 'splash' | 'overlay' | 'recovery'
 
 const roles = new WeakMap<BrowserWindow, WindowRole>()
 

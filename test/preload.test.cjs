@@ -29,10 +29,9 @@ function loadPreload(invoke = async () => ({ shown: true })) {
       exposeInMainWorld: (name, api) => {
         page[name] = api
       },
-    },
-    webFrame: {
-      executeJavaScript: async (source) => {
-        return runInNewContext(source, {
+      executeInMainWorld: ({ func, args }) => {
+        return runInNewContext(`(${func.toString()})(...args)`, {
+          args,
           window: page,
           Event,
           Map: InstanceMap,

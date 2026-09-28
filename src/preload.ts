@@ -5,9 +5,10 @@
  * 不引入 Menu / Tray / Notification / BrowserWindow。普通浏览器没有 window.dshDesktop。
  */
 
-import { contextBridge, ipcRenderer, webFrame } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
+import { MAX_BODY, MAX_TITLE, WEB_NOTIFICATION_CONTRIBUTOR } from './main/notifications/constants'
+import { installWebNotificationBridge } from './main/notifications/web-bridge'
 import type {
-  DesktopBootFailure,
   DesktopContribution,
   DesktopNotifyAction,
   DesktopNotifySpec,
@@ -16,61 +17,14 @@ import type {
   DesktopOverlayOpenSpec,
   DesktopOverlayUpdateSpec,
   DesktopPluginInfo,
+  DesktopPluginFailure,
   DesktopRestartChoice,
   DesktopRestartPrompt,
   DesktopSeatAction,
   DesktopSeatName,
   DshDesktop,
 } from './shared/api'
-import type { Ipc as IpcShape } from './shared/ipc'
-
-// 窗口 webPreferences 开了 sandbox:true，sandboxed preload 的 require 只认
-// electron 等极少数模块，require('./shared/ipc') 会直接抛错、整个 preload 夭折，
-// window.dshDesktop 永远注入不进来。因此频道常量必须内联在本文件里；
-// import type 编译后完全擦除（不产生 require），satisfies 把下面每个
-// 字面量值强绑定到 ./shared/ipc.ts 的 as const 类型上——任一边改了一个字符，
-// tsc 都会在这里报错，无需人工同步。
-const Ipc = {
-  updates: {
-    appVersion: 'desktop:updates:app-version',
-    downloadApp: 'desktop:updates:download-app',
-    updateDsh: 'desktop:updates:update-dsh',
-    restartWeb: 'desktop:updates:restart-web',
-    prompt: 'desktop:updates:prompt',
-    promptAck: 'desktop:updates:prompt-ack',
-    promptResponse: 'desktop:updates:prompt-response',
-    relaunch: 'desktop:updates:relaunch',
-  },
-  seats: {
-    list: 'desktop:seats:list',
-    contribute: 'desktop:seats:contribute',
-    revoke: 'desktop:seats:revoke',
-    action: 'desktop:seats:action',
-  },
-  notify: {
-    show: 'desktop:notify:show',
-    close: 'desktop:notify:close',
-    action: 'desktop:notify:action',
-    closed: 'desktop:notify:closed',
-  },
-  overlays: {
-    open: 'desktop:overlays:open',
-    update: 'desktop:overlays:update',
-    move: 'desktop:overlays:move',
-    setIgnoreMouseEvents: 'desktop:overlays:set-ignore-mouse-events',
-    activateOwner: 'desktop:overlays:activate-owner',
-    focus: 'desktop:overlays:focus',
-    close: 'desktop:overlays:close',
-    list: 'desktop:overlays:list',
-    closed: 'desktop:overlays:closed',
-  },
-  plugins: {
-    list: 'desktop:plugins:list',
-    setEnabled: 'desktop:plugins:set-enabled',
-    clearFailure: 'desktop:plugins:clear-failure',
-    relaunch: 'desktop:plugins:relaunch',
-  },
-} satisfies typeof IpcShape
+import { Ipc } from './shared/ipc'
 
 const api: DshDesktop = {
   updates: {
@@ -141,19 +95,28 @@ const api: DshDesktop = {
     },
   },
   plugins: {
-    list: (): Promise<{ plugins: DesktopPluginInfo[]; failure: DesktopBootFailure | null }> =>
+    list: (): Promise<{ plugins: DesktopPluginInfo[]; failure: DesktopPluginFailure | null }> =>
       ipcRenderer.invoke(Ipc.plugins.list),
     setEnabled: (name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke(Ipc.plugins.setEnabled, name, enabled),
     clearFailure: (): Promise<void> => ipcRenderer.invoke(Ipc.plugins.clearFailure),
+    onFailureChanged: (listener: () => void): (() => void) => {
+      const wrapped = () => listener()
+      ipcRenderer.on(Ipc.plugins.failureChanged, wrapped)
+      return () => ipcRenderer.removeListener(Ipc.plugins.failureChanged, wrapped)
+    },
     relaunch: (): void => ipcRenderer.send(Ipc.plugins.relaunch),
   },
 }
 
 contextBridge.exposeInMainWorld('dshDesktop', api)
 
-// 构建时内联 notifications/web-bridge.ts 的唯一实现，沙箱运行时不 require 本地模块。
-declare const __DSH_WEB_NOTIFICATION_BRIDGE__: string
-void webFrame.executeJavaScript(__DSH_WEB_NOTIFICATION_BRIDGE__).catch((error: unknown) => {
+// Electron 会序列化函数；跨上下文所需的常量必须显式传参。
+try {
+  contextBridge.executeInMainWorld({
+    func: installWebNotificationBridge,
+    args: [WEB_NOTIFICATION_CONTRIBUTOR, MAX_TITLE, MAX_BODY],
+  })
+} catch (error) {
   console.warn('[DSH-Desktop] preload notification bridge failed', error)
-})
+}

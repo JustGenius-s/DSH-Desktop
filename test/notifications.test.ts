@@ -22,7 +22,10 @@ vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events')
   return {
     BrowserWindow: class extends EventEmitter {
-      webContents = Object.assign(new EventEmitter(), { isDestroyed: () => false })
+      webContents = Object.assign(new EventEmitter(), {
+        isDestroyed: () => false,
+        setWindowOpenHandler: vi.fn(),
+      })
       destroyed = false
       isDestroyed = () => this.destroyed
       close = vi.fn(() => {

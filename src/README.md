@@ -51,15 +51,20 @@ src/
 4. 各功能 IPC 必须在主窗口 `loadURL()` 之前注册。
 5. 主窗口导航规则每次读取当前 DSH origin，热重启换端口后仍保持同源限制。
 
-`preload.ts` 保持独立：沙箱中的 `require` 不能加载本地模块。它只在运行时
-导入 `electron`，共享契约使用 `import type`；内联 IPC 常量由 `satisfies`
-检查一致性。网页通知脚本由 `notifications/web-bridge.ts` 维护唯一实现，构建时
-内联到 preload；首次加载和整页导航均由 preload 安装，不再由主进程重复注入。
-不能直接给 preload 添加普通本地导入。构建会校验内联占位符，漏掉这一步的裸
-`tsc` 输出不能用于运行。
+`preload.ts` 通过 esbuild 将本地模块打包为一个文件，沙箱运行时只导入 `electron`。
+IPC 常量直接复用 `shared/ipc.ts`。网页通知桥是普通 TypeScript 函数，使用
+`contextBridge.executeInMainWorld` 安装；函数不能捕获外部变量，常量通过参数传入。
+必须通过 `pnpm build` 构建，裸 `tsc` 输出不能用于运行。
 
-所有需要 preload 的窗口统一使用 `platform/paths.ts`，定位应用根目录下的
-`dist/preload.js`，不依赖功能模块自身的 `__dirname`。应用入口仍是 `dist/main.js`。
+主窗口、浮窗与恢复页使用 `platform/paths.ts` 定位 `dist/preload.js`。
+启动页使用独立的 `dist/splash-preload.js`，仅通过 IPC 接收状态文字。
+应用入口仍是 `dist/main.js`。
+
+启动失败、服务异常退出、热重启失败与主窗口崩溃共用一个恢复窗口。
+插件界面错误通过 Electron `console-message` 接收 DSH 当前的
+`slot entry crashed` / `slot factory occurrence crashed` 报告，保留 DSH 的局部隔离。
+这两类报告没有可靠的插件包名，因此只展示详情，不做包名归因或自动禁用；
+升级 DSH 时需复核该报告格式。普通业务日志、点击回调和异步异常不走这个入口。
 
 主窗口以固定名称 `dsh-main` 使用 Electron 的窗口状态持久化；首次采用默认尺寸，
 之后恢复用户的尺寸、位置和显示状态，不额外强制最大化。浮窗使用独立缩放模式，
@@ -99,5 +104,4 @@ pnpm check      # 格式检查、类型检查、构建及完整测试
   `scripts/start.mjs`，保留现有 `NODE_OPTIONS` 并追加 TLS 兼容选项。
 - 异步操作在第一次 `await` 前设置并发保护；定时器、监听器在成功与超时路径都清理。
   IPC 初始化通过明确的注册状态保持幂等，不用普通事件监听数量推断 invoke 处理器。
-- 修改行为时增加对应回归测试。沙箱 preload 的必要内联代码保留，并通过类型和测试
-  检查契约一致性。
+- 通过类型检查和现有测试验证改动；新增测试遵循仓库的 `Agents.md` 约定。

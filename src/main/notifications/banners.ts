@@ -63,17 +63,17 @@ export function showBannerOverlay(
     },
   })
   const bannerContents = win.webContents
+  bannerContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'screen-saver')
 
   const title = escapeHtml(spec.title)
   const body = escapeHtml(spec.body)
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>
 html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
-.b{height:100%;box-sizing:border-box;padding:14px 16px;border-radius:12px;background:rgba(28,28,30,.94);color:#f5f5f7;box-shadow:0 8px 28px rgba(0,0,0,.4);display:flex;flex-direction:column;justify-content:center;cursor:pointer;user-select:none}
+.b{height:100%;box-sizing:border-box;padding:14px 16px;border-radius:12px;background:rgba(28,28,30,.94);color:#f5f5f7;box-shadow:0 8px 28px rgba(0,0,0,.4);display:flex;flex-direction:column;justify-content:center;cursor:pointer;user-select:none;text-decoration:none}
 .t{font-size:13px;font-weight:600;line-height:1.3}
 .d{font-size:12px;opacity:.85;margin-top:4px;line-height:1.35}
-</style></head><body><div class="b" id="b"><div class="t">${title}</div><div class="d">${body}</div></div>
-<script>document.getElementById('b').addEventListener('click',function(){location.href='dsh-notify://click'})</script></body></html>`
+</style></head><body><a class="b" href="dsh-notify://click"><div class="t">${title}</div><div class="d">${body}</div></a></body></html>`
 
   let closed = false
   const cleanup = (): void => {

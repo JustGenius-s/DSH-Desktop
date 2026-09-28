@@ -1,6 +1,6 @@
 /**
  * Electron 应用编排：准备 DSH 运行时、启动服务、交接启动页与主窗口，
- * 并处理热重启和退出。启动失败时打开恢复页，由用户决定是否禁用插件。
+ * 并处理热重启和退出。启动或运行失败时打开恢复页，由用户决定是否禁用插件。
  */
 
 import { app, dialog, type BrowserWindow } from 'electron'
@@ -27,7 +27,7 @@ import {
   startPluginConfigWatch,
   stopPluginConfigWatch,
 } from './plugins/config-watch'
-import { openRecoveryWindow, recordBootFailure, setupPluginRecovery } from './plugins/recovery'
+import { openRecoveryWindow, setupPluginRecovery } from './plugins/recovery'
 import { registerDshWebHost } from './restart'
 import {
   READY_TIMEOUT_MS,
@@ -69,25 +69,11 @@ let dshPort: number | null = null
 let mainWindow: BrowserWindow | null = null
 let dshOrigin: string | null = null
 let stopping = false
-let restartingWeb = false
 let restartInFlight: Promise<void> | null = null
 
 function reportError(title: string, message: string): void {
   console.error(`[DSH-Desktop] ${title}: ${message}`)
   dialog.showErrorBox(title, message)
-}
-
-/** 从 dsh 子进程输出里抽出真正有用的失败原因（优先 Error: / YAMLException，而不是栈底）。 */
-function summarizeDshFailure(output: string): string {
-  const lines = output
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-  const errorLine = lines.find(
-    (line) => line.startsWith('Error:') || line.includes('YAMLException:'),
-  )
-  if (errorLine !== undefined) return errorLine
-  return lines.slice(-5).join('\n')
 }
 
 /** 等 dsh 就绪或进程退出；就绪时带回应 load 的 URL，超时返回 'timeout'。 */
@@ -110,9 +96,11 @@ async function waitExitOrReady(
 
 function attachExitHandler(host: DshHost): void {
   host.child.on('exit', (code, signal) => {
-    // 主动退出、热重启或已被替换的进程不弹错误框。
-    if (stopping || restartingWeb || dshProcess !== host.child) return
+    // 主动退出、热重启或已被替换的进程不进入恢复流程。
+    if (stopping || dshProcess !== host.child) return
+    dshProcess = null
     const output = host.recentOutput()
+    const reason = `DSH 服务意外退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）`
     try {
       const logPath = join(app.getPath('logs'), 'dsh-service.log')
       const record = [
@@ -122,16 +110,9 @@ function attachExitHandler(host: DshHost): void {
       ].join('\n')
       appendFileSync(logPath, record)
     } catch {
-      // 诊断落盘失败不阻断错误提示。
+      // 诊断落盘失败不阻断恢复页。
     }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const summary = summarizeDshFailure(output)
-      const detail = summary ? `\n${summary}` : ''
-      reportError(
-        'DSH-Desktop',
-        `DSH 服务意外退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）${detail}`,
-      )
-    }
+    openRecoveryWindow('service', `${output}\n${reason}`)
   })
 }
 
@@ -143,15 +124,15 @@ interface BootResult {
 
 /**
  * 启动一次 dsh web。成功后记住进程、端口与 origin；失败时返回输出，
- * 由调用方选择恢复页或错误提示，不自动改动插件配置。
+ * 由调用方打开恢复页，不自动改动插件配置。
  */
 async function bootDsh(port: number, bin: string): Promise<BootResult> {
   const host = startDsh(port, bin)
   dshProcess = host.child
-  attachExitHandler(host)
-
   const outcome = await waitExitOrReady(host, port)
   if (outcome.kind === 'ready') {
+    // 启动阶段的退出由本次 boot 处理，避免与运行期恢复重复报告。
+    attachExitHandler(host)
     dshPort = port
     dshOrigin = `http://${DSH_HOST}:${port}`
     try {
@@ -179,7 +160,6 @@ async function restartDshWebImpl(): Promise<void> {
   if (restartInFlight !== null) return restartInFlight
 
   const run = (async () => {
-    restartingWeb = true
     const resumeWatch = pausePluginConfigWatch()
     try {
       closeAllOverlays()
@@ -198,13 +178,9 @@ async function restartDshWebImpl(): Promise<void> {
         port = await findFreePort()
       }
 
-      // 热重启失败时保留配置并显示原因，供用户排查。
       const result = await bootDsh(port, bin)
       if (result.launchUrl === null) {
-        const summary = summarizeDshFailure(result.lastOutput)
-        const detail = summary === '' ? '' : `\n${summary}`
-        reportError('DSH-Desktop', `DSH 服务重启失败${detail}`)
-        throw new Error('DSH 服务重启失败')
+        throw new Error(`DSH 服务重启失败\n${result.lastOutput}`)
       }
 
       markPluginConfigApplied()
@@ -214,8 +190,12 @@ async function restartDshWebImpl(): Promise<void> {
         await clearStaleDshAuthCookies()
         await win.loadURL(result.launchUrl)
       }
+    } catch (error) {
+      if (!stopping) {
+        openRecoveryWindow('service', error instanceof Error ? error.message : String(error))
+      }
+      throw error
     } finally {
-      restartingWeb = false
       resumeWatch()
     }
   })()
@@ -270,14 +250,14 @@ app.whenReady().then(async () => {
   }
 
   setSplashStatus(splash, '正在启动 DSH 服务…')
+  setupPluginRecovery()
   const boot = await bootDsh(port, bin)
+  if (stopping) return
 
   if (boot.launchUrl === null) {
-    recordBootFailure(boot.lastOutput)
     // 即使无法归因到插件，恢复页也能展示原始错误。
-    setupPluginRecovery()
+    openRecoveryWindow('startup', boot.lastOutput)
     splash.close()
-    openRecoveryWindow()
     return
   }
 
@@ -286,11 +266,15 @@ app.whenReady().then(async () => {
   setupDesktopSeats()
   setupDesktopNotify()
   setupDesktopOverlays(() => dshOrigin)
-  setupPluginRecovery()
   // splash 不在这里关闭，交给 createMainWindow 的 ready-to-show 在显示主窗口后关闭，
   // 确保启动全程始终有可见窗口。
   mainWindow = createMainWindow(boot.launchUrl, {
     getOrigin: () => dshOrigin,
+    onFailure: (kind, detail) => {
+      if (stopping) return
+      openRecoveryWindow(kind, detail)
+      if (!splash.isDestroyed()) splash.close()
+    },
     onReady: (win) => {
       refreshDesktopSeats()
       // 先显示并前置主窗口，再关 splash：全程保持至少一个可见窗口，避免出现

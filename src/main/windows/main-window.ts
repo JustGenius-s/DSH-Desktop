@@ -3,6 +3,7 @@ import { app, BrowserWindow, screen, shell } from 'electron'
 import { join } from 'node:path'
 import { enforceRegularDockPolicy } from '../platform/dock-policy'
 import { preloadPath } from '../platform/paths'
+import { watchPluginFailures } from '../plugins/recovery'
 import { setWindowRole } from './registry'
 import { titleBarChromeCSS } from './titlebar'
 
@@ -12,6 +13,7 @@ interface MainWindowOptions {
   getOrigin: () => string | null
   onReady: (win: BrowserWindow) => void
   onClosed: (win: BrowserWindow) => void
+  onFailure: (kind: 'renderer' | 'plugin', detail: string) => void
 }
 
 /**
@@ -88,6 +90,14 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
   // Electron 恢复已保存的尺寸、位置和显示状态；首次启动采用上面的默认 bounds。
   win.once('ready-to-show', () => options.onReady(win))
   win.on('closed', () => options.onClosed(win))
+  watchPluginFailures(win.webContents, (detail) => options.onFailure('plugin', detail))
+  win.webContents.on('render-process-gone', (_event, { reason, exitCode }) => {
+    if (win.isDestroyed() || win.webContents.isDestroyed() || reason === 'clean-exit') return
+    options.onFailure(
+      'renderer',
+      `DSH 主窗口渲染进程退出（reason=${reason}, exitCode=${exitCode}）`,
+    )
+  })
   // DSH 网页加载完成后注入顶部拖拽条与红绿灯避让样式（隐藏原生标题栏后必需）。
   win.webContents.on('did-finish-load', () => {
     void applyTitleBarChrome(win)

@@ -241,7 +241,7 @@ export interface DshDesktopOverlays {
 }
 
 // ---------------------------------------------------------------------------
-// plugins — 插件清单 / 启用禁用（启动失败恢复页）
+// plugins — 插件清单 / 启用禁用 / 故障恢复
 // ---------------------------------------------------------------------------
 
 /** 单个 bundle 插件在恢复页里的展示行。 */
@@ -252,14 +252,15 @@ export interface DesktopPluginInfo {
   enabled: boolean
   /** 核心 bundle（禁了 dsh 更起不来），界面上锁定。 */
   core: boolean
-  /** 疑似导致本次启动失败的元凶（高亮，不自动禁用）。 */
+  /** 疑似导致本次故障的插件（高亮，不自动禁用）。 */
   suspected: boolean
 }
 
-/** 启动失败归因结果：故障摘要 + 疑似元凶 bundle 列表。 */
-export interface DesktopBootFailure {
-  /** 最近一次启动失败的输出尾部（最多 5 行），用于展示。 */
-  tail: string
+/** 最近一次故障及可归因的 profile bundle。 */
+export interface DesktopPluginFailure {
+  kind: 'startup' | 'service' | 'renderer' | 'plugin'
+  /** 错误详情，最多保留 16,384 个字符。 */
+  detail: string
   /** 疑似元凶 bundle 名（可能为空，此时不归因只列全部）。 */
   suspected: string[]
 }
@@ -267,11 +268,13 @@ export interface DesktopBootFailure {
 /** 插件清单 + 禁用/启用/重启。 */
 export interface DshDesktopPlugins {
   /** 读全部插件（profile bundles 视图）。 */
-  list(): Promise<{ plugins: DesktopPluginInfo[]; failure: DesktopBootFailure | null }>
+  list(): Promise<{ plugins: DesktopPluginInfo[]; failure: DesktopPluginFailure | null }>
   /** 启用/禁用一个 bundle；核心 bundle 拒绝。 */
   setEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }>
   /** 清除桌面端维护的隔离记录（保留 bundles 现状）。 */
   clearFailure(): Promise<void>
+  /** 恢复页打开期间收到新的故障或清除记录时刷新。 */
+  onFailureChanged(listener: () => void): () => void
   /** 重启应用（等同 relaunch）。 */
   relaunch(): void
 }

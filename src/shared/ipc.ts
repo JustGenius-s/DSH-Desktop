@@ -2,9 +2,7 @@
  * 主进程 ↔ preload 的 IPC 频道名。插件看不见这些字符串，
  * 只通过 window.dshDesktop 的四族方法说话。
  *
- * 本文件是频道名的唯一事实源。preload.ts 在 sandboxed 环境里不能
- * require 本文件，只内联了一份值并用 `satisfies typeof Ipc` 绑定：
- * 这里任何改动都会让 preload.ts 编译报错，不存在悄悄漂移。
+ * 本文件是频道名的唯一事实源，构建时与 preload 一起打包。
  */
 
 export const Ipc = {
@@ -47,6 +45,7 @@ export const Ipc = {
     list: 'desktop:plugins:list',
     setEnabled: 'desktop:plugins:set-enabled',
     clearFailure: 'desktop:plugins:clear-failure',
+    failureChanged: 'desktop:plugins:failure-changed',
     relaunch: 'desktop:plugins:relaunch',
   },
 } as const
