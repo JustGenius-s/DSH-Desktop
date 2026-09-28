@@ -12,7 +12,10 @@ vi.mock('electron', () => ({
   session: { defaultSession: sessions.current },
 }))
 
-import { clearStaleDshAuthCookies, hardenChromiumStorage } from '../src/main/platform/session'
+import {
+  clearStaleDshAuthCookies,
+  hardenChromiumStorage,
+} from '../../../../src/main/platform/session'
 
 beforeEach(() => {
   vi.resetAllMocks()

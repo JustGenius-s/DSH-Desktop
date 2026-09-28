@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
 }))
 
 const originalPlatform = process.platform
-let policy: typeof import('../src/main/platform/dock-policy')
+let policy: typeof import('../../../../src/main/platform/dock-policy')
 
 beforeEach(async () => {
   vi.resetModules()
@@ -30,7 +30,7 @@ beforeEach(async () => {
   mocks.app.dock.isVisible.mockReturnValue(true)
   mocks.app.dock.show.mockResolvedValue(undefined)
   mocks.createFromPath.mockReturnValue(mocks.image)
-  policy = await import('../src/main/platform/dock-policy')
+  policy = await import('../../../../src/main/platform/dock-policy')
 })
 
 afterEach(() => {

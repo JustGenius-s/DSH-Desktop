@@ -6,9 +6,12 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 const registry = vi.hoisted(() => vi.fn())
 const runPnpm = vi.hoisted(() => vi.fn<(args: readonly string[]) => Promise<void>>())
 vi.mock('electron', () => ({ session: { defaultSession: { fetch: registry } } }))
-vi.mock('../src/main/runtime/environment', () => ({ runPnpm }))
+vi.mock('../../../../src/main/runtime/environment', () => ({ runPnpm }))
 
-import { ensureDshInstalled, latestDshAcrossChannels } from '../src/main/runtime/installation'
+import {
+  ensureDshInstalled,
+  latestDshAcrossChannels,
+} from '../../../../src/main/runtime/installation'
 
 let home: string
 let bin: string

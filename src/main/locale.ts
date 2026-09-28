@@ -12,7 +12,7 @@
  * 壳只读这一段，不认识别的字段；读不到就回落 `app.getLocale()` 的系统语言
  * （见 menus/seats.ts 的 currentMenuLang）。不新增 IPC、不需要网页配合。
  *
- * 不依赖 Electron，便于 vitest 直接测（见 test/shell-locale.test.ts）。
+ * 不依赖 Electron，便于 vitest 直接测（见 test/unit/main/locale.test.ts）。
  */
 
 import { readFileSync } from 'node:fs'

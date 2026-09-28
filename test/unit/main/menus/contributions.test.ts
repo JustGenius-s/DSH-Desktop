@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { sanitizeContribution } from '../src/main/menus/contributions'
+import { sanitizeContribution } from '../../../../src/main/menus/contributions'
 
 const request = { seat: 'tray', contributor: 'plugin', items: [{ id: 'open', label: 'Open' }] }
 

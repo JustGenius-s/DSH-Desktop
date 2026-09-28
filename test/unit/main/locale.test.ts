@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, onTestFinished, test } from 'vitest'
 
-import { currentShellLang, parseLocalePreference, resolveShellLang } from '../src/main/locale'
+import { currentShellLang, parseLocalePreference, resolveShellLang } from '../../../src/main/locale'
 
 /** 临时 DSH home；用例结束自动清理。 */
 function tempHome(): string {

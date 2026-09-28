@@ -9,7 +9,7 @@ const {
   findFreePort,
   readWebPort,
   rememberWebPort,
-} = require('../dist/main/runtime/web-port.js')
+} = require('../../dist/main/runtime/web-port.js')
 
 function directory(t) {
   const path = mkdtempSync(join(tmpdir(), 'dsh-web-port-'))

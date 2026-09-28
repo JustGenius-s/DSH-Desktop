@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events')
 const { readFileSync } = require('node:fs')
 const { join } = require('node:path')
 const { runInNewContext } = require('node:vm')
-const { Ipc } = require('../dist/shared/ipc.js')
+const { Ipc } = require('../../dist/shared/ipc.js')
 
 function loadPreload(invoke = async () => ({ shown: true })) {
   const reportedErrors = []
@@ -40,7 +40,7 @@ function loadPreload(invoke = async () => ({ shown: true })) {
       },
     },
   }
-  runInNewContext(readFileSync(join(__dirname, '../dist/preload.js'), 'utf8'), {
+  runInNewContext(readFileSync(join(__dirname, '../../dist/preload.js'), 'utf8'), {
     exports: {},
     require: (name) => {
       assert.equal(name, 'electron', 'sandboxed preload cannot require local modules')

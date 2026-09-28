@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { Ipc } from '../src/shared/ipc'
+import { Ipc } from '../../../src/shared/ipc'
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => void>(),
@@ -13,8 +13,8 @@ vi.mock('electron', () => ({
       mocks.handlers.set(channel, handler),
   },
 }))
-vi.mock('../src/main/locale', () => ({ currentShellLang: () => 'en' }))
-vi.mock('../src/main/windows/registry', () => ({
+vi.mock('../../../src/main/locale', () => ({ currentShellLang: () => 'en' }))
+vi.mock('../../../src/main/windows/registry', () => ({
   focusMainWindow: vi.fn(),
   getMainWindow: () => ({
     isDestroyed: () => false,
@@ -33,7 +33,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 async function loadRestart() {
-  const restart = await import('../src/main/restart')
+  const restart = await import('../../../src/main/restart')
   restart.registerDshWebHost({ isReady: () => true, restart: mocks.restart })
   return restart
 }

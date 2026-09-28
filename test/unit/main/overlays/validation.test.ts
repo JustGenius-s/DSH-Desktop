@@ -1,5 +1,9 @@
 import { expect, test } from 'vitest'
-import { sanitizeBounds, sanitizeChrome, sanitizeOpen } from '../src/main/overlays/validation'
+import {
+  sanitizeBounds,
+  sanitizeChrome,
+  sanitizeOpen,
+} from '../../../../src/main/overlays/validation'
 
 const origin = 'http://127.0.0.1:49487'
 const request = {

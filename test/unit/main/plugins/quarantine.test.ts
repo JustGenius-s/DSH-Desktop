@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { listPlugins, setBundleEnabled } from '../src/main/plugins/quarantine'
+import { listPlugins, setBundleEnabled } from '../../../../src/main/plugins/quarantine'
 
 let home: string
 let packagePath: string

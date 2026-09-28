@@ -2,12 +2,12 @@ import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
-vi.mock('../src/main/runtime/environment', () => ({
+vi.mock('../../../../src/main/runtime/environment', () => ({
   electronNodeFlags: () => ['--no-use-system-ca'],
   withElectronNodeEnvironment: (env: NodeJS.ProcessEnv) => env,
 }))
 
-import { dshNodeFlags, onceExit } from '../src/main/runtime/host'
+import { dshNodeFlags, onceExit } from '../../../../src/main/runtime/host'
 
 function childProcess(signalCode: NodeJS.Signals | null = null): ChildProcess {
   return Object.assign(new EventEmitter(), { exitCode: null, signalCode }) as ChildProcess

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, expect, test, vi, type Mock } from 'vitest'
-import { Ipc } from '../src/shared/ipc'
-import type { DesktopNotifySpec } from '../src/shared/api'
+import { Ipc } from '../../../../src/shared/ipc'
+import type { DesktopNotifySpec } from '../../../../src/shared/api'
 
 type MockWindow = EventEmitter & {
   webContents: EventEmitter
@@ -53,7 +53,7 @@ vi.mock('electron', async () => {
     screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1200, height: 800 } }) },
   }
 })
-vi.mock('../src/main/windows/registry', () => ({
+vi.mock('../../../../src/main/windows/registry', () => ({
   focusMainWindow: state.focus,
   webContentsById: (id: number) => state.senders.get(id),
 }))
@@ -89,14 +89,14 @@ beforeEach(async () => {
   state.senders.clear()
   state.handles.clear()
   state.focus.mockClear()
-  const { setupDesktopNotify } = await import('../src/main/notifications/service')
+  const { setupDesktopNotify } = await import('../../../../src/main/notifications/service')
   setupDesktopNotify()
 })
 afterEach(() => vi.useRealTimers())
 
 test('a replaced banner owns its timer and late closed event cannot remove its replacement', async () => {
   const { showBannerOverlay, closeBanner, bannerKey } =
-    await import('../src/main/notifications/banners')
+    await import('../../../../src/main/notifications/banners')
   const firstClosed = vi.fn()
   const secondClosed = vi.fn()
   showBannerOverlay(1, spec, { onAction: vi.fn(), onClosed: firstClosed })

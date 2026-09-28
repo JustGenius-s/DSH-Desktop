@@ -8,7 +8,7 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => '/deskt
 vi.mock('node:fs', () => ({ existsSync: mocks.exists }))
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn, spawnSync: mocks.spawnSync }))
 
-import { runPnpm, withElectronNodeEnvironment } from '../src/main/runtime/environment'
+import { runPnpm, withElectronNodeEnvironment } from '../../../../src/main/runtime/environment'
 
 const originalPlatform = process.platform
 const originalExecutable = process.execPath

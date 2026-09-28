@@ -67,15 +67,24 @@ Dev and packaged builds both use the current Electron executable and the externa
 Tests (no Electron window or browser required):
 
 ```sh
-pnpm test          # vitest for test/*.test.ts + node --test for test/*.test.cjs
+pnpm test               # build + both runners (see below)
+pnpm test:unit          # vitest, test/unit/**  (no build needed)
+pnpm test:integration   # build + test/integration/**
 pnpm typecheck
-pnpm check         # formatting + typecheck + build + all tests
+pnpm check              # formatting + typecheck + build + all tests
 ```
 
-The TypeScript suites run under vitest; the `*.test.cjs` suites are plain
-`node:test` (see `vitest.config.ts`, which deliberately excludes them).
-The test command builds fresh output first. See [source organization](src/README.md)
-for module responsibilities, dependency rules, and Electron startup constraints.
+`test/` mirrors `src/` so a failing file names the module it covers:
+
+| Path | Runner | What it may import |
+| --- | --- | --- |
+| `test/unit/**/*.test.ts` | vitest | `src/` directly; Electron via `vi.mock` |
+| `test/integration/**/*.test.ts` | vitest | `src/` directly, multi-module flows |
+| `test/integration/**/*.test.cjs` | `node:test` | only built `dist/` and `scripts/` |
+
+The `.ts` suites run under vitest; the `.cjs` suites are plain `node:test`
+(see `vitest.config.ts`, which deliberately excludes them). The `test` script
+builds fresh output first.
 
 ## Package
 

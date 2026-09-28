@@ -17,7 +17,7 @@ function launcherFixture(t) {
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(join(root, 'scripts'))
   mkdirSync(join(root, 'node_modules', 'electron'), { recursive: true })
-  copyFileSync(join(__dirname, '../scripts/start.mjs'), join(root, 'scripts/start.mjs'))
+  copyFileSync(join(__dirname, '../../scripts/start.mjs'), join(root, 'scripts/start.mjs'))
   // 用 Node 代替 Electron，真实验证包含空格的路径、参数和进程退出码。
   writeFileSync(
     join(root, 'node_modules/electron/index.js'),

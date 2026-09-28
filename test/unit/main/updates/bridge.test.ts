@@ -8,19 +8,19 @@ const runtime = vi.hoisted(() => ({
 const restart = vi.hoisted(() => vi.fn<() => Promise<boolean>>())
 
 vi.mock('electron', () => ({ app: { getVersion: () => '0.2.0' }, ipcMain: {}, shell: {} }))
-vi.mock('../src/main/runtime/installation', () => runtime)
-vi.mock('../src/main/updates/app-update', () => ({
+vi.mock('../../../../src/main/runtime/installation', () => runtime)
+vi.mock('../../../../src/main/updates/app-update', () => ({
   APP_RELEASES_URL: 'https://example.test/releases',
   checkForAppUpdate: vi.fn(),
 }))
-vi.mock('../src/main/restart', () => ({
+vi.mock('../../../../src/main/restart', () => ({
   offerRestartDshWeb: restart,
   restartDshWeb: vi.fn(),
   setupRestartPromptIpc: vi.fn(),
 }))
 
-import { updateDshRuntime } from '../src/main/updates/bridge'
-import { setUpdateResult, updateSummary } from '../src/main/updates/state'
+import { updateDshRuntime } from '../../../../src/main/updates/bridge'
+import { setUpdateResult, updateSummary } from '../../../../src/main/updates/state'
 
 beforeEach(() => {
   vi.resetAllMocks()
