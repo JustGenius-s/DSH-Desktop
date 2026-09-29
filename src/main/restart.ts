@@ -23,14 +23,34 @@ export interface DshWebHostControl {
 
 let control: DshWebHostControl | null = null
 
+/** 服务真的重启完成后通知的对象：装好待生效的状态要靠它清掉。 */
+const restartedHooks = new Set<() => void>()
+
 export function registerDshWebHost(next: DshWebHostControl): void {
   control = next
+}
+
+/**
+ * 订阅「网页服务已重启」。
+ *
+ * 热重启有多个入口（菜单、IPC、更新流程），只要服务起来了，磁盘上装好的新运行时
+ * 就变成正在跑的版本——订阅一次就能覆盖所有入口，不必在每个调用点补清理。
+ */
+export function onDshWebRestarted(fn: () => void): void {
+  restartedHooks.add(fn)
 }
 
 /** 立刻重启网页服务（菜单 / IPC 显式动作，不再弹确认框）。 */
 export async function restartDshWeb(): Promise<void> {
   if (control === null || !control.isReady()) throw new Error('DSH 网页服务尚未就绪')
   await control.restart()
+  for (const fn of restartedHooks) {
+    try {
+      fn()
+    } catch (err) {
+      console.error('[DSH-Desktop] dsh web restarted hook failed', err)
+    }
+  }
 }
 
 type RestartPromptCopy = Omit<DesktopRestartPrompt, 'id' | 'reason'>

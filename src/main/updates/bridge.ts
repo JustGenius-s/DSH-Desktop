@@ -13,10 +13,23 @@
 import { app, ipcMain, shell } from 'electron'
 import { Ipc } from '../../shared/ipc'
 import { compareVersions } from '../../shared/version'
-import { offerRestartDshWeb, restartDshWeb, setupRestartPromptIpc } from '../restart'
+import { currentShellLang } from '../locale'
+import {
+  offerRestartDshWeb,
+  onDshWebRestarted,
+  restartDshWeb,
+  setupRestartPromptIpc,
+} from '../restart'
 import { installedDshVersion, latestDshAcrossChannels, updateDsh } from '../runtime/installation'
 import { APP_RELEASES_URL, checkForAppUpdate } from './app-update'
-import { clearDshUpdate, setUpdateResult } from './state'
+import { notifyDshUpdateDone, notifyDshUpdateStarted, reportDshUpdateFailure } from './feedback'
+import {
+  clearDshPendingRestart,
+  clearDshUpdate,
+  setDshPendingRestart,
+  setDshUpdating,
+  setUpdateResult,
+} from './state'
 
 /** 后台轮询间隔：6 小时。 */
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -51,28 +64,75 @@ export async function checkDesktopUpdates(): Promise<void> {
   refreshMenu()
 }
 
-/** 把 DSH 运行时装到指定版本；省略版本时装所有渠道里最高的。 */
+/**
+ * 把 DSH 运行时装到指定版本；省略版本时装所有渠道里最高的。
+ *
+ * pnpm 装一次要一两分钟，全程必须有回执：开始就把菜单切成「正在更新」并禁用入口，
+ * 装完弹结果，失败弹错误框。否则点下去界面毫无变化，用户只会以为菜单坏了。
+ *
+ * 装完不无条件清掉更新提示：用户选「稍后」时新运行时还没生效，此时改成提示
+ * 「重启服务以应用」——既不再重复安装，也不会假装已经是最新的。
+ */
 export async function updateDshRuntime(version?: unknown): Promise<void> {
   if (updating) throw new Error('已有更新在进行中')
   updating = true
+  setDshUpdating(true)
+  refreshMenu()
+  const lang = currentShellLang(app.getLocale())
   try {
     const target =
       typeof version === 'string' && version !== '' ? version : await latestDshAcrossChannels()
     if (target === undefined) throw new Error('当前没有可更新的 DSH 版本')
+    notifyDshUpdateStarted(lang, target)
     await updateDsh(target)
     const restarted = await offerRestartDshWeb('dsh-runtime').catch(() => false)
     if (restarted) {
       clearDshUpdate()
-      refreshMenu()
+      clearDshPendingRestart()
+    } else {
+      setDshPendingRestart(target)
     }
+    // 装完重新核对一次：已安装版本变了，菜单上的「有更新」要跟着变。
+    await checkDesktopUpdates()
+    notifyDshUpdateDone(lang, target, !restarted)
+  } catch (err) {
+    reportDshUpdateFailure(lang, err)
+    throw err
   } finally {
     updating = false
+    setDshUpdating(false)
+    refreshMenu()
+  }
+}
+
+/**
+ * 应用已装好但还没生效的运行时：热重启网页服务，桌面壳不退出。
+ *
+ * 清理交给 onDshWebRestarted 钩子，这样从「重启 DSH 服务」等其他入口重启后，
+ * 待生效状态同样会消失——不用在每个入口都补一遍。
+ */
+export async function applyPendingDshRuntime(): Promise<void> {
+  const lang = currentShellLang(app.getLocale())
+  try {
+    await restartDshWeb()
+  } catch (err) {
+    reportDshUpdateFailure(lang, err)
+    throw err
   }
 }
 
 /** 注册 IPC：只有执行端点，检测不再对网页开放。 */
 export function setupDesktopBridge(): void {
   setupRestartPromptIpc()
+
+  // 服务一起来，磁盘上装好的新运行时就变成正在跑的版本：清掉待生效状态，
+  // 重新核对一次「还有没有更新」，再重画菜单。
+  onDshWebRestarted(() => {
+    clearDshPendingRestart()
+    clearDshUpdate()
+    refreshMenu()
+    void checkDesktopUpdates()
+  })
 
   ipcMain.handle(Ipc.updates.appVersion, () => app.getVersion())
 

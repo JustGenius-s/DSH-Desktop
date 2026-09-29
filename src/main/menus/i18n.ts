@@ -51,7 +51,12 @@ export interface MenuStrings {
   trayShow: string
   /** 帮助菜单 + 其中的 DSH 运行时更新项。 */
   help: string
-  updateDsh: string
+  /** 有更新时的入口：带上目标版本，光写「更新」看不出要装哪个。 */
+  updateDshTo: string
+  /** pnpm 安装进行中：菜单项禁用并显示进度。 */
+  updatingDsh: string
+  /** 新版已装好但服务还跑在旧版：这一项改成热重启以应用。 */
+  restartToApplyDsh: string
   /** 检查桌面版更新（应用菜单项 / 关于弹窗按钮共用）。 */
   checkUpdates: string
   /** 关于弹窗。 */
@@ -65,6 +70,8 @@ export interface MenuStrings {
   /** 结果弹窗里的 DSH 运行时说明行。 */
   dshRuntime: string
   dshNotInstalled: string
+  /** 已装好待重启：{installed} 是磁盘上的新版，{running} 是当前跑着的版本。 */
+  dshPendingRestart: string
 }
 
 const ZH: MenuStrings = {
@@ -94,7 +101,9 @@ const ZH: MenuStrings = {
   bringAllToFront: '前置全部窗口',
   trayShow: '显示 {name}',
   help: '帮助',
-  updateDsh: '更新 DSH 运行时',
+  updateDshTo: '更新到 DSH 运行时 {version}',
+  updatingDsh: '正在更新 DSH 运行时…',
+  restartToApplyDsh: '重启服务以应用 {version}',
   checkUpdates: '检查更新…',
   aboutTitle: '关于 {name}',
   aboutDetail: '{name} {version}',
@@ -104,6 +113,7 @@ const ZH: MenuStrings = {
   downloadLatest: '下载并安装',
   dshRuntime: 'DSH 运行时 {version}',
   dshNotInstalled: 'DSH 运行时未安装',
+  dshPendingRestart: 'DSH 运行时 {installed}（已安装，重启服务后生效；当前 {running}）',
 }
 
 const EN: MenuStrings = {
@@ -133,7 +143,9 @@ const EN: MenuStrings = {
   bringAllToFront: 'Bring All to Front',
   trayShow: 'Show {name}',
   help: 'Help',
-  updateDsh: 'Update DSH Runtime',
+  updateDshTo: 'Update to DSH runtime {version}',
+  updatingDsh: 'Updating DSH runtime…',
+  restartToApplyDsh: 'Restart service to apply {version}',
   checkUpdates: 'Check for Updates…',
   aboutTitle: 'About {name}',
   aboutDetail: '{name} {version}',
@@ -143,6 +155,8 @@ const EN: MenuStrings = {
   downloadLatest: 'Download and Install',
   dshRuntime: 'DSH runtime {version}',
   dshNotInstalled: 'DSH runtime not installed',
+  dshPendingRestart:
+    'DSH runtime {installed} (installed, pending service restart; running {running})',
 }
 
 /** 按语言取整套文案。 */

@@ -30,7 +30,12 @@ import { Ipc } from '../../shared/ipc'
 import { currentShellLang, type ShellLang } from '../locale'
 import { restartDshWeb } from '../restart'
 import { APP_RELEASES_URL } from '../updates/app-update'
-import { checkDesktopUpdates, setMenuRefreshHook, updateDshRuntime } from '../updates/bridge'
+import {
+  applyPendingDshRuntime,
+  checkDesktopUpdates,
+  setMenuRefreshHook,
+  updateDshRuntime,
+} from '../updates/bridge'
 import { updateSummary } from '../updates/state'
 import { focusMainWindow, webContentsById } from '../windows/registry'
 import { sanitizeContribution, type MenuContribution } from './contributions'
@@ -225,16 +230,61 @@ function rebuildApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-/** 帮助菜单：DSH 运行时更新。 */
+/**
+ * 帮助菜单：DSH 运行时更新。
+ *
+ * 这一项的状态必须跟着安装过程走：pnpm 要跑一两分钟，期间文案切成「正在更新」
+ * 并禁用入口，装好待重启时切成「重启以应用」。全程不给反馈的话，用户点完会以为
+ * 菜单坏了。
+ */
 function helpMenu(t: MenuStrings): MenuItemConstructorOptions {
   const s = updateSummary()
+  const item = dshUpdateItem(t, s)
   return {
     role: 'help',
     label: t.help,
-    submenu: [
-      { label: t.updateDsh, enabled: s.dshUpdate !== null, click: () => void updateDshRuntime() },
-    ],
+    submenu: [item],
   }
+}
+
+/**
+ * 运行时更新那一项：文案 / 禁用 / 动作都由当前状态决定。
+ *
+ * 没有更新时这一项不是死项，而是把已安装的运行时版本号显示出来——光一个禁用的
+ * 「更新」看不出装的是哪个版本、也看不出到底有没有更新。
+ *
+ * 导出是为了让四种状态能被单测直接覆盖（见 menus/update-item.test.ts）。
+ */
+export function dshUpdateItem(
+  t: MenuStrings,
+  s: ReturnType<typeof updateSummary>,
+): MenuItemConstructorOptions {
+  if (s.dshUpdating) return { label: t.updatingDsh, enabled: false }
+  if (s.dshPendingRestart !== null) {
+    return {
+      label: t.restartToApplyDsh.replace('{version}', s.dshPendingRestart),
+      click: () => void applyPendingDshRuntime().catch(logDshFailure),
+    }
+  }
+  if (s.dshUpdate !== null) {
+    return {
+      label: t.updateDshTo.replace('{version}', s.dshUpdate),
+      click: () => void updateDshRuntime().catch(logDshFailure),
+    }
+  }
+  // 已是最新：显示当前版本号。禁用是因为点下去没有可做的事。
+  return {
+    label: s.dsh === null ? t.dshNotInstalled : t.dshRuntime.replace('{version}', s.dsh),
+    enabled: false,
+  }
+}
+
+/**
+ * 菜单点击是 fire-and-forget，不接住就是未处理 rejection。
+ * 用户可见的错误框由 updates/bridge 统一弹一次，这里只留诊断日志，避免弹两遍。
+ */
+function logDshFailure(err: unknown): void {
+  console.error('[DSH-Desktop] dsh runtime update failed', err)
 }
 
 /** 关于弹窗：显示版本，带一个「检查更新」按钮。 */
@@ -273,13 +323,28 @@ async function checkAndShowDialog(): Promise<void> {
   if (hasUpdate && response === 0) void shell.openExternal(APP_RELEASES_URL)
 }
 
-/** 版本详情两行：桌面版 + DSH 运行时。 */
+/**
+ * 版本详情两行：桌面版 + DSH 运行时。
+ *
+ * 运行时那行要区分三种状态：正在安装、装好待重启、正常运行。装好但没重启时，
+ * 磁盘上是新版、跑着的是旧版，两行都说清楚才不会让人以为更新没生效。
+ */
 function versionDetail(t: MenuStrings, s: ReturnType<typeof updateSummary>): string {
   const name = app.name || 'DSH-Desktop'
   return [
     t.aboutDetail.replace('{name}', name).replace('{version}', s.app),
-    s.dsh === null ? t.dshNotInstalled : t.dshRuntime.replace('{version}', s.dsh),
+    dshRuntimeLine(t, s),
   ].join('\n')
+}
+
+function dshRuntimeLine(t: MenuStrings, s: ReturnType<typeof updateSummary>): string {
+  if (s.dshUpdating) return t.updatingDsh
+  if (s.dshPendingRestart !== null) {
+    return t.dshPendingRestart
+      .replace('{installed}', s.dshPendingRestart)
+      .replace('{running}', s.dsh ?? t.dshNotInstalled)
+  }
+  return s.dsh === null ? t.dshNotInstalled : t.dshRuntime.replace('{version}', s.dsh)
 }
 
 function ownerAppMenu(
