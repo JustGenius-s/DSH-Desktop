@@ -1,11 +1,12 @@
 /** 主窗口的原生外观、导航规则和页面集成；应用编排通过回调接入。 */
-import { app, BrowserWindow, screen, shell } from 'electron'
+import { app, BrowserWindow, screen, shell, systemPreferences } from 'electron'
 import { join } from 'node:path'
 import { enforceRegularDockPolicy } from '../platform/dock-policy'
+import { installDshMicrophonePermission } from '../platform/microphone'
 import { preloadPath } from '../platform/paths'
 import { watchPluginFailures } from '../plugins/recovery'
 import { setWindowRole } from './registry'
-import { titleBarChromeCSS } from './titlebar'
+import { installTitleBarChrome } from './titlebar-controller'
 
 const DSH_BG = '#151517'
 
@@ -15,11 +16,6 @@ interface MainWindowOptions {
   onClosed: (win: BrowserWindow) => void
   onFailure: (kind: 'renderer' | 'plugin', detail: string) => void
 }
-
-/**
- * 记录 insertCSS 返回的 key，在再次注入前尝试移除；导航可能使旧 key 失效。
- */
-const titleBarChromeKeys: string[] = []
 
 /**
  * 把链接交给系统默认浏览器打开。只放行 http/https：AI 输出里可能出现
@@ -86,6 +82,14 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
   })
 
   setWindowRole(win, 'main')
+  installDshMicrophonePermission(
+    win.webContents.session,
+    win.webContents,
+    () => options.getOrigin(),
+    process.platform,
+    () => systemPreferences.askForMediaAccess('microphone'),
+  )
+  installTitleBarChrome(win, process.platform)
   win.setMenuBarVisibility(false)
   // Electron 恢复已保存的尺寸、位置和显示状态；首次启动采用上面的默认 bounds。
   win.once('ready-to-show', () => options.onReady(win))
@@ -98,9 +102,8 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
       `DSH 主窗口渲染进程退出（reason=${reason}, exitCode=${exitCode}）`,
     )
   })
-  // DSH 网页加载完成后注入顶部拖拽条与红绿灯避让样式（隐藏原生标题栏后必需）。
+  // 拖拽样式由 installTitleBarChrome 在加载和全屏切换时写入。
   win.webContents.on('did-finish-load', () => {
-    void applyTitleBarChrome(win)
     enforceRegularDockPolicy()
   })
   // AI 输出的超链接不在壳内开新窗口、也不把应用窗口整页跳走：
@@ -128,29 +131,4 @@ export function createMainWindow(url: string, options: MainWindowOptions): Brows
   })
   void win.loadURL(url)
   return win
-}
-
-/**
- * 替换标题栏拖动与浮层穿透样式。规则定义在 titlebar.ts。
- */
-async function applyTitleBarChrome(win: BrowserWindow): Promise<void> {
-  const wc = win.webContents
-  if (wc.isDestroyed()) return
-
-  for (const key of titleBarChromeKeys) {
-    if (wc.isDestroyed()) return
-    try {
-      await wc.removeInsertedCSS(key)
-    } catch {
-      // 上一轮注入的 key 在导航后已失效；没有可移除的样式，继续。
-    }
-  }
-  titleBarChromeKeys.length = 0
-
-  if (wc.isDestroyed()) return
-  try {
-    titleBarChromeKeys.push(await wc.insertCSS(titleBarChromeCSS(process.platform)))
-  } catch {
-    // 注入失败不阻断启动：窗口只是拖不动，页面功能不受影响。
-  }
 }

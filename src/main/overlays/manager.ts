@@ -19,6 +19,7 @@ import { Ipc } from '../../shared/ipc'
 import { enforceRegularDockPolicy } from '../platform/dock-policy'
 import { preloadPath } from '../platform/paths'
 import { setWindowRole, webContentsById } from '../windows/registry'
+import { createOverlayOperations } from './operations'
 import { roundInt, sanitizeBounds, sanitizeChrome, sanitizeOpen } from './validation'
 
 interface OverlayRow {
@@ -29,6 +30,7 @@ interface OverlayRow {
 }
 
 const overlays: OverlayRow[] = []
+const openOperations = createOverlayOperations()
 const watchedOwners = new Set<number>()
 let getOrigin: () => string | null = () => null
 /** 主窗口还没前置完成时，立刻 *显示* overlay 会抢前台。窗体本身必须更早建好。 */
@@ -60,14 +62,19 @@ function watchOwner(wc: WebContents): void {
   })
 }
 
+function isLiveOverlay(row: OverlayRow): boolean {
+  // close() can destroy WebContents before BrowserWindow reports destruction.
+  return overlays.includes(row) && !row.win.isDestroyed() && !row.win.webContents.isDestroyed()
+}
+
 function findSenderOverlay(wc: WebContents): OverlayRow | undefined {
-  return overlays.find((row) => !row.win.isDestroyed() && row.win.webContents.id === wc.id)
+  return overlays.find((row) => isLiveOverlay(row) && row.win.webContents.id === wc.id)
 }
 
 function resolveOverlay(sender: WebContents, id: string): OverlayRow | undefined {
   const self = findSenderOverlay(sender)
   if (self !== undefined) return self.id === id ? self : undefined
-  return overlays.find((row) => row.ownerWcId === sender.id && row.id === id)
+  return overlays.find((row) => row.ownerWcId === sender.id && row.id === id && isLiveOverlay(row))
 }
 
 /** 更新类操作严格校验 id 与所有权；close 单独保持幂等。 */
@@ -106,7 +113,9 @@ function recycleOverlayWindow(win: BrowserWindow): void {
 
 function dispose(row: OverlayRow, notify: boolean): void {
   const idx = overlays.indexOf(row)
-  if (idx >= 0) overlays.splice(idx, 1)
+  if (idx < 0) return
+  openOperations.cancel(row.contributor)
+  overlays.splice(idx, 1)
   if (!row.win.isDestroyed()) {
     row.win.removeAllListeners('closed')
     recycleOverlayWindow(row.win)
@@ -121,6 +130,7 @@ function closeOwned(ownerWcId: number, notify: boolean): void {
 }
 
 export function closeAllOverlays(): void {
+  openOperations.cancelAll()
   for (const row of overlays.splice(0)) {
     if (!row.win.isDestroyed()) {
       row.win.removeAllListeners('closed')
@@ -250,35 +260,40 @@ function isAllowedOverlayUrl(url: string): boolean {
   }
 }
 
-function isBenignLoadError(err: unknown): boolean {
-  const code =
-    err !== null && typeof err === 'object' && 'code' in err
-      ? String((err as { code?: unknown }).code)
-      : ''
-  const message = err instanceof Error ? err.message : String(err)
-  return code === 'ERR_ABORTED' || code === 'ERR_FAILED' || /ERR_ABORTED|ERR_FAILED/.test(message)
-}
-
 function isDestroyedError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err)
   return /Object has been destroyed|Render frame was disposed/i.test(message)
 }
 
-async function loadOverlayUrl(win: BrowserWindow, url: string): Promise<void> {
-  if (win.isDestroyed()) return
+function assertOpen(row: OverlayRow, owner: WebContents, isCurrent: () => boolean): void {
+  if (!isCurrent() || owner.isDestroyed() || !isLiveOverlay(row)) {
+    throw new Error('desktop overlay closed while loading')
+  }
+}
+
+async function loadAndShowOverlay(
+  row: OverlayRow,
+  owner: WebContents,
+  url: string,
+  isCurrent: () => boolean,
+  afterShow?: () => void,
+): Promise<void> {
   try {
-    await win.loadURL(url)
-  } catch (err) {
-    // Closing a still-loading overlay (replace / settings remount) aborts
-    // Chromium, or throws TypeError once the BrowserWindow is already gone.
-    if (win.isDestroyed() || isDestroyedError(err)) return
-    if (isBenignLoadError(err)) {
-      try {
-        if (win.webContents.getURL() === url) return
-      } catch {
-        return
-      }
+    assertOpen(row, owner, isCurrent)
+    if (row.win.webContents.getURL() !== url) {
+      assertOpen(row, owner, isCurrent)
+      // An aborted or failed navigation is not a successfully loaded window.
+      await row.win.loadURL(url)
     }
+    assertOpen(row, owner, isCurrent)
+    row.win.show()
+    afterShow?.()
+  } catch (err) {
+    const closed =
+      !isCurrent() || owner.isDestroyed() || !isLiveOverlay(row) || isDestroyedError(err)
+    dispose(row, false)
+    if (closed) throw new Error('desktop overlay closed while loading')
+    console.error('[DSH-Desktop] overlay load failed', err)
     throw err
   }
 }
@@ -286,11 +301,12 @@ async function loadOverlayUrl(win: BrowserWindow, url: string): Promise<void> {
 async function openOverlay(
   owner: WebContents,
   spec: DesktopOverlayOpenSpec,
+  isCurrent: () => boolean,
 ): Promise<DesktopOverlayInfo> {
   await whenOverlaysAllowed()
-  if (owner.isDestroyed()) throw new Error('desktop overlay owner gone')
+  if (!isCurrent() || owner.isDestroyed()) throw new Error('desktop overlay closed while loading')
   const existing = overlays.find(
-    (row) => row.contributor === spec.contributor && !row.win.isDestroyed(),
+    (row) => row.contributor === spec.contributor && isLiveOverlay(row),
   )
   if (existing !== undefined) {
     existing.id = spec.id
@@ -304,15 +320,12 @@ async function openOverlay(
     const y = spec.bounds.y ?? current.y
     const placed = clampRect(x, y, width, height)
     existing.win.setBounds({ x: placed.x, y: placed.y, width: placed.width, height: placed.height })
-    if (existing.win.webContents.getURL() !== spec.url) {
-      if (existing.win.isDestroyed()) throw new Error('desktop overlay closed while loading')
-      await loadOverlayUrl(existing.win, spec.url)
-    }
-    if (!existing.win.isDestroyed()) {
-      existing.win.show()
-      if (reuseChrome.alwaysOnTop !== undefined)
+    await loadAndShowOverlay(existing, owner, spec.url, isCurrent, () => {
+      if (reuseChrome.alwaysOnTop !== undefined) {
         applyAlwaysOnTop(existing.win, reuseChrome.alwaysOnTop)
-    }
+      }
+    })
+    assertOpen(existing, owner, isCurrent)
     enforceRegularDockPolicy()
     return infoOf(existing)
   }
@@ -357,6 +370,7 @@ async function openOverlay(
   win.on('closed', () => {
     const idx = overlays.indexOf(row)
     if (idx >= 0) {
+      openOperations.cancel(row.contributor)
       overlays.splice(idx, 1)
       sendClosed(row)
     }
@@ -366,23 +380,10 @@ async function openOverlay(
     dispose(row, true)
   })
 
-  try {
-    if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
-    await loadOverlayUrl(win, spec.url)
-  } catch (err) {
-    const closed =
-      win.isDestroyed() ||
-      isDestroyedError(err) ||
-      (err instanceof Error && err.message === 'desktop overlay closed while loading')
-    dispose(row, false)
-    if (closed) throw new Error('desktop overlay closed while loading')
-    const detail = err instanceof Error ? `${err.message} (${spec.url})` : String(err)
-    console.error(`[DSH-Desktop] overlay load failed: ${detail}`)
-    throw err instanceof Error ? err : new Error('desktop overlay failed to load')
-  }
-  if (win.isDestroyed()) throw new Error('desktop overlay closed while loading')
-  win.show()
-  if (chrome.alwaysOnTop === true) applyAlwaysOnTop(win, true)
+  await loadAndShowOverlay(row, owner, spec.url, isCurrent, () => {
+    if (chrome.alwaysOnTop === true) applyAlwaysOnTop(win, true)
+  })
+  assertOpen(row, owner, isCurrent)
   // 幂等守卫：overlay 打开后把被压掉的 Dock tile 拉回来。
   enforceRegularDockPolicy()
   console.log(
@@ -440,7 +441,7 @@ function updateOverlay(row: OverlayRow, raw: unknown): DesktopOverlayInfo {
 function listFor(sender: WebContents): DesktopOverlayInfo[] {
   const self = findSenderOverlay(sender)
   if (self !== undefined) return [infoOf(self)]
-  return overlays.filter((row) => row.ownerWcId === sender.id && !row.win.isDestroyed()).map(infoOf)
+  return overlays.filter((row) => row.ownerWcId === sender.id && isLiveOverlay(row)).map(infoOf)
 }
 
 /** 注册 overlay IPC。必须在 loadURL 之前调用。 */
@@ -458,7 +459,9 @@ export function setupDesktopOverlays(origin: () => string | null): void {
       throw new Error('invalid desktop overlay')
     }
     watchOwner(event.sender)
-    return openOverlay(event.sender, spec)
+    return openOperations.run(spec.contributor, (isCurrent) =>
+      openOverlay(event.sender, spec, isCurrent),
+    )
   })
 
   ipcMain.handle(Ipc.overlays.update, (event, id: unknown, raw: unknown): DesktopOverlayInfo => {

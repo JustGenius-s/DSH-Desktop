@@ -5,7 +5,12 @@
  * 重启询问通过 IPC 交给网页订阅者渲染；没有订阅者时超时跳过。
  */
 
-import { app, ipcMain } from 'electron'
+import {
+  app,
+  ipcMain,
+  type IpcMainEvent,
+  type WebContentsDidStartNavigationEventParams,
+} from 'electron'
 import { randomUUID } from 'node:crypto'
 import type {
   DesktopRestartChoice,
@@ -101,6 +106,8 @@ const RESPONSE_TIMEOUT_MS = 120_000
 interface PendingPrompt {
   id: string
   acknowledged: boolean
+  webContentsId: number
+  dispose: () => void
   resolve: (choice: DesktopRestartChoice | 'dropped') => void
 }
 
@@ -110,21 +117,34 @@ let offerChain: Promise<void> = Promise.resolve()
 
 function settlePending(id: string, choice: DesktopRestartChoice | 'dropped'): void {
   if (pending === null || pending.id !== id) return
-  const { resolve } = pending
+  const { resolve, dispose } = pending
   pending = null
+  dispose()
   resolve(choice)
+}
+
+function isPendingSender(event: IpcMainEvent, id: unknown): id is string {
+  return (
+    typeof id === 'string' &&
+    pending !== null &&
+    pending.id === id &&
+    pending.webContentsId === event.sender.id &&
+    !event.sender.isDestroyed() &&
+    event.senderFrame !== null &&
+    event.senderFrame === event.sender.mainFrame
+  )
 }
 
 /** 注册询问 IPC。setupDesktopBridge 时调一次。 */
 export function setupRestartPromptIpc(): void {
   if (ipcReady) return
   ipcReady = true
-  ipcMain.on(Ipc.updates.promptAck, (_event, id: unknown) => {
-    if (typeof id !== 'string' || pending === null || pending.id !== id) return
+  ipcMain.on(Ipc.updates.promptAck, (event, id: unknown) => {
+    if (!isPendingSender(event, id) || pending === null) return
     pending.acknowledged = true
   })
-  ipcMain.on(Ipc.updates.promptResponse, (_event, id: unknown, choice: unknown) => {
-    if (typeof id !== 'string') return
+  ipcMain.on(Ipc.updates.promptResponse, (event, id: unknown, choice: unknown) => {
+    if (!isPendingSender(event, id)) return
     if (choice !== 'later' && choice !== 'restart') return
     settlePending(id, choice)
   })
@@ -135,6 +155,13 @@ function sendPrompt(prompt: DesktopRestartPrompt): boolean {
   if (win === undefined || win.isDestroyed() || win.webContents.isDestroyed()) return false
   try {
     focusMainWindow()
+    if (
+      pending === null ||
+      pending.id !== prompt.id ||
+      pending.webContentsId !== win.webContents.id
+    ) {
+      return false
+    }
     win.webContents.send(Ipc.updates.prompt, prompt)
     return true
   } catch {
@@ -145,6 +172,9 @@ function sendPrompt(prompt: DesktopRestartPrompt): boolean {
 async function askRenderer(
   reason: DesktopRestartWebReason,
 ): Promise<DesktopRestartChoice | 'dropped'> {
+  const win = getMainWindow()
+  if (win === undefined || win.isDestroyed() || win.webContents.isDestroyed()) return 'dropped'
+  const contents = win.webContents
   const copy = PROMPT_COPY[reason][currentShellLang(app.getLocale())]
   const prompt: DesktopRestartPrompt = {
     id: randomUUID(),
@@ -154,9 +184,32 @@ async function askRenderer(
 
   let retryTimer: NodeJS.Timeout | undefined
   let responseTimer: NodeJS.Timeout | undefined
+  const dropped = (): void => {
+    settlePending(prompt.id, 'dropped')
+  }
+  const navigation = (details: WebContentsDidStartNavigationEventParams): void => {
+    if (details.isMainFrame && !details.isSameDocument) dropped()
+  }
+  const detach = (): void => {
+    clearTimeout(retryTimer)
+    clearTimeout(responseTimer)
+    contents.off('destroyed', dropped)
+    contents.off('render-process-gone', dropped)
+    contents.off('did-start-navigation', navigation)
+  }
+  contents.once('destroyed', dropped)
+  contents.on('render-process-gone', dropped)
+  contents.on('did-start-navigation', navigation)
+
   try {
     return await new Promise((resolve) => {
-      pending = { id: prompt.id, acknowledged: false, resolve }
+      pending = {
+        id: prompt.id,
+        acknowledged: false,
+        webContentsId: contents.id,
+        dispose: detach,
+        resolve,
+      }
       let attempts = 0
       const sendOrRetry = (): void => {
         if (pending === null || pending.id !== prompt.id || pending.acknowledged) return
@@ -178,8 +231,7 @@ async function askRenderer(
       sendOrRetry()
     })
   } finally {
-    clearTimeout(retryTimer)
-    clearTimeout(responseTimer)
+    detach()
   }
 }
 

@@ -7,7 +7,7 @@ declare global {
 }
 
 /**
- * 将网页 Notification 接入桌面通知桥，统一使用主进程的原生通知和横幅。
+ * 将网页 Notification 接入系统通知。
  * Chromium 的权限状态不代表系统已授权；系统通知能否展示仍取决于系统设置。
  */
 export function installWebNotificationBridge(

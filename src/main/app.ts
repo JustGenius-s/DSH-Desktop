@@ -81,17 +81,26 @@ async function waitExitOrReady(
   host: DshHost,
   port: number,
 ): Promise<{ kind: 'ready'; url: string } | { kind: 'exited' | 'timeout' }> {
+  const hasExited = (): boolean => host.child.exitCode !== null || host.child.signalCode !== null
+  if (hasExited()) return { kind: 'exited' }
   const controller = new AbortController()
-  const exited = new Promise<{ kind: 'exited' }>((resolveExit) =>
-    host.child.once('exit', () => resolveExit({ kind: 'exited' })),
-  )
+  let onExit!: () => void
+  const exited = new Promise<{ kind: 'exited' }>((resolveExit) => {
+    onExit = () => resolveExit({ kind: 'exited' })
+    host.child.once('exit', onExit)
+    if (hasExited()) onExit()
+  })
   const ready = waitForReady(host, port, READY_TIMEOUT_MS, controller.signal).then(
     (url) => ({ kind: 'ready' as const, url }),
     () => ({ kind: 'timeout' as const }),
   )
-  const result = await Promise.race([exited, ready])
-  controller.abort()
-  return result
+  try {
+    const result = await Promise.race([exited, ready])
+    return hasExited() ? { kind: 'exited' } : result
+  } finally {
+    controller.abort()
+    host.child.off('exit', onExit)
+  }
 }
 
 function attachExitHandler(host: DshHost): void {

@@ -141,14 +141,14 @@ export interface DesktopNotifyResult {
 export interface DshDesktopNotify {
   /**
    * 弹出一条系统通知。同 contributor+id 替换，不堆叠。
-   * 不支持或被限流时 `{ shown: false }`，不抛错。
+   * 不支持、系统拒绝或被限流时 `{ shown: false }`，不抛错。
    */
   show(spec: DesktopNotifySpec): Promise<DesktopNotifyResult>
   /** 关掉一条；省略 id 则关掉该 contributor 的全部。 */
   close(contributor: string, id?: string): Promise<void>
   /** 用户点击通知时回传 contributor+id；主进程同时前置窗口。 */
   onAction(listener: (action: DesktopNotifyAction) => void): () => void
-  /** 通知的系统提示和壳内横幅均结束时回传；被同 id 替换时也会结束。 */
+  /** 系统通知结束、被主动关闭或被同 id 替换时回传。展示失败只由 show() 的 shown:false 表示。 */
   onClosed(listener: (action: DesktopNotifyAction) => void): () => void
 }
 

@@ -94,33 +94,33 @@ beforeEach(async () => {
 })
 afterEach(() => vi.useRealTimers())
 
-test('a replaced banner owns its timer and late closed event cannot remove its replacement', async () => {
-  const { showBannerOverlay, closeBanner, bannerKey } =
-    await import('../../../../src/main/notifications/banners')
-  const firstClosed = vi.fn()
-  const secondClosed = vi.fn()
-  showBannerOverlay(1, spec, { onAction: vi.fn(), onClosed: firstClosed })
-  const first = state.windows[0]
-  vi.advanceTimersByTime(5000)
-  showBannerOverlay(1, spec, { onAction: vi.fn(), onClosed: secondClosed })
-  const second = state.windows[1]
-  expect(firstClosed).toHaveBeenCalledTimes(1)
-  expect(first.listenerCount('ready-to-show')).toBe(0)
-  expect(first.webContents.listenerCount('will-navigate')).toBe(0)
-  first.emit('closed')
-  vi.advanceTimersByTime(1000)
-  expect(second.isDestroyed()).toBe(false)
-  closeBanner(bannerKey(1, spec.contributor, spec.id))
-  expect(second.isDestroyed()).toBe(true)
-  expect(secondClosed).toHaveBeenCalledTimes(1)
+test('a failed system notification reports shown false and opens no shell window', async () => {
+  const wc = sender()
+  const pending = show(wc)
+  expect(state.windows).toHaveLength(0)
+  state.notes[0].emit('failed', {}, 'UNErrorDomain 1')
+  await expect(pending).resolves.toEqual({ shown: false })
+  expect(wc.send).not.toHaveBeenCalled()
+  expect(state.notes[0].eventNames()).toEqual([])
+  expect(state.windows).toHaveLength(0)
   expect(vi.getTimerCount()).toBe(0)
 })
 
-test('same-id replacement ignores late native events and keeps the current notification alive', () => {
+test('no receipt counts as delivered after the confirm timeout, still without a shell window', async () => {
   const wc = sender()
-  show(wc)
+  const pending = show(wc)
+  await vi.advanceTimersByTimeAsync(1_499)
+  expect(state.windows).toHaveLength(0)
+  await vi.advanceTimersByTimeAsync(1)
+  await expect(pending).resolves.toEqual({ shown: true })
+  expect(state.windows).toHaveLength(0)
+})
+
+test('same-id replacement ignores late native events and keeps the current notification alive', async () => {
+  const wc = sender()
+  const first = show(wc)
   const old = state.notes[0]
-  show(wc, { instanceId: 'second' })
+  const second = show(wc, { instanceId: 'second' })
   const current = state.notes[1]
   expect(old.close).toHaveBeenCalledOnce()
   expect(old.eventNames()).toEqual([])
@@ -130,8 +130,11 @@ test('same-id replacement ignores late native events and keeps the current notif
   expect(wc.send.mock.calls).toEqual([
     [Ipc.notify.closed, { contributor: 'plugin', id: 'message', instanceId: 'first' }],
   ])
+  await expect(first).resolves.toEqual({ shown: false })
+  current.emit('show')
+  await expect(second).resolves.toEqual({ shown: true })
   current.emit('click')
-  expect(state.windows[1].isDestroyed()).toBe(true)
+  expect(state.windows).toHaveLength(0)
   expect(current.close).toHaveBeenCalledOnce()
   expect(wc.send.mock.calls.slice(1)).toEqual([
     [Ipc.notify.action, { contributor: 'plugin', id: 'message', instanceId: 'second' }],
@@ -139,53 +142,61 @@ test('same-id replacement ignores late native events and keeps the current notif
   ])
 })
 
-test('native close keeps a visible banner actionable, and the final presentation sends closed', () => {
+test('native close releases a shown notification immediately', async () => {
   const wc = sender()
-  show(wc)
+  const pending = show(wc)
+  state.notes[0].emit('show')
+  await expect(pending).resolves.toEqual({ shown: true })
   state.notes[0].emit('close')
-  expect(wc.send).not.toHaveBeenCalled()
-  vi.advanceTimersByTime(6000)
   expect(wc.send.mock.calls).toEqual([
     [Ipc.notify.closed, { contributor: 'plugin', id: 'message', instanceId: 'first' }],
   ])
   expect(state.notes[0].eventNames()).toEqual([])
+  expect(state.windows).toHaveLength(0)
+  expect(vi.getTimerCount()).toBe(0)
 })
 
-test('banner click closes native presentation even when the system never fires a click', () => {
+test('native click focuses the main window and does not open a shell window', async () => {
   const wc = sender()
-  show(wc)
-  const event = { url: 'dsh-notify://click', preventDefault: vi.fn() }
-  state.windows[0].webContents.emit('will-navigate', event)
-  expect(event.preventDefault).toHaveBeenCalledOnce()
+  const pending = show(wc)
+  state.notes[0].emit('show')
+  await pending
+  state.notes[0].emit('click')
   expect(state.focus).toHaveBeenCalledOnce()
   expect(state.notes[0].close).toHaveBeenCalledOnce()
   expect(wc.send.mock.calls.map(([channel]) => channel)).toEqual([
     Ipc.notify.action,
     Ipc.notify.closed,
   ])
+  expect(state.windows).toHaveLength(0)
   expect(vi.getTimerCount()).toBe(0)
 })
 
-test('sender disposal releases banners and native listeners', () => {
+test('sender disposal releases native listeners', async () => {
   const wc = sender()
-  show(wc)
+  const pending = show(wc)
   wc.isDestroyed.mockReturnValue(true)
   wc.emit('destroyed')
-  expect(state.windows[0].isDestroyed()).toBe(true)
+  await expect(pending).resolves.toEqual({ shown: false })
+  expect(state.windows).toHaveLength(0)
   expect(state.notes[0].eventNames()).toEqual([])
   expect(wc.listenerCount('did-start-navigation')).toBe(0)
   expect(wc.send).not.toHaveBeenCalled()
   expect(vi.getTimerCount()).toBe(0)
 })
 
-test('full navigation clears sender notifications and throttle while same-document navigation keeps them', () => {
+test('full navigation clears sender notifications and throttle while same-document navigation keeps them', async () => {
   const wc = sender()
-  show(wc)
+  const pending = show(wc)
   wc.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true })
   wc.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false })
-  expect(state.windows[0].isDestroyed()).toBe(false)
+  expect(state.notes[0].close).not.toHaveBeenCalled()
   wc.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
-  expect(state.windows[0].isDestroyed()).toBe(true)
+  expect(state.notes[0].close).toHaveBeenCalledOnce()
   expect(wc.send).not.toHaveBeenCalled()
-  expect(show(wc, { id: 'new-page' })).toEqual({ shown: true })
+  await expect(pending).resolves.toEqual({ shown: false })
+  const next = show(wc, { id: 'new-page' })
+  state.notes[1].emit('show')
+  await expect(next).resolves.toEqual({ shown: true })
+  expect(state.windows).toHaveLength(0)
 })

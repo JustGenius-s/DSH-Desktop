@@ -1,11 +1,26 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Ipc } from '../../../src/shared/ipc'
 
-const mocks = vi.hoisted(() => ({
-  handlers: new Map<string, (...args: unknown[]) => void>(),
-  send: vi.fn(),
-  restart: vi.fn(),
-}))
+const mocks = vi.hoisted(() => {
+  const frame = {}
+  const send = vi.fn()
+  const contents = {
+    id: 7,
+    isDestroyed: () => false,
+    mainFrame: frame,
+    send,
+    on: () => undefined,
+    off: () => undefined,
+    once: () => undefined,
+  }
+  return {
+    handlers: new Map<string, (...args: unknown[]) => void>(),
+    send,
+    frame,
+    contents,
+    restart: vi.fn(),
+  }
+})
 vi.mock('electron', () => ({
   app: { getLocale: () => 'en' },
   ipcMain: {
@@ -18,7 +33,7 @@ vi.mock('../../../src/main/windows/registry', () => ({
   focusMainWindow: vi.fn(),
   getMainWindow: () => ({
     isDestroyed: () => false,
-    webContents: { isDestroyed: () => false, send: mocks.send },
+    webContents: mocks.contents,
   }),
 }))
 
@@ -40,8 +55,9 @@ async function loadRestart() {
 
 function respond(choice: 'later' | 'restart'): void {
   const prompt = mocks.send.mock.lastCall?.[1] as { id: string }
-  mocks.handlers.get(Ipc.updates.promptAck)?.({}, prompt.id)
-  mocks.handlers.get(Ipc.updates.promptResponse)?.({}, prompt.id, choice)
+  const event = { sender: mocks.contents, senderFrame: mocks.frame }
+  mocks.handlers.get(Ipc.updates.promptAck)?.(event, prompt.id)
+  mocks.handlers.get(Ipc.updates.promptResponse)?.(event, prompt.id, choice)
 }
 
 test('an unacknowledged prompt stops retrying and releases the response timeout', async () => {

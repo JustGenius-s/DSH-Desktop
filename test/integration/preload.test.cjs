@@ -25,6 +25,9 @@ function loadPreload(invoke = async () => ({ shown: true })) {
   ipcRenderer.send = (...args) => calls.push(args)
   const electron = {
     ipcRenderer,
+    webFrame: {
+      executeJavaScript: () => Promise.resolve(),
+    },
     contextBridge: {
       exposeInMainWorld: (name, api) => {
         page[name] = api
@@ -42,6 +45,7 @@ function loadPreload(invoke = async () => ({ shown: true })) {
   }
   runInNewContext(readFileSync(join(__dirname, '../../dist/preload.js'), 'utf8'), {
     exports: {},
+    process,
     require: (name) => {
       assert.equal(name, 'electron', 'sandboxed preload cannot require local modules')
       return electron

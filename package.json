@@ -78,6 +78,7 @@
       "icon": "build/icon.icns",
       "extendInfo": {
         "NSUserNotificationAlertStyle": "alert",
+        "NSMicrophoneUsageDescription": "DSH-Desktop 使用麦克风进行语音输入。",
         "LSEnvironment": {
           "NODE_OPTIONS": "--no-use-system-ca"
         },
@@ -88,10 +89,12 @@
         "dmg",
         "zip"
       ],
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "notarize": false,
-      "identity": null
+      "identity": "-",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist"
     },
     "win": {
       "icon": "build/icon.ico",

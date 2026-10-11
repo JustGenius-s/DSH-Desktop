@@ -53,6 +53,8 @@ DSH 在运行时从 npm 安装，不随应用打包。升级 DSH = 启动时检�
 
 ## 开发
 
+本机构建和测试建议使用 Node 24 LTS。测试命令使用递归 glob，macOS 启动测试还需要支持 `--no-use-system-ca`。
+
 ```sh
 pnpm install
 pnpm collect      # 收集 pnpm 和 Electron 命令转发器到 runtime/
@@ -65,7 +67,9 @@ pnpm dev          # start 的别名
 测试（不需要 Electron 窗口或浏览器）：
 
 ```sh
-pnpm test         # test/*.test.ts 走 vitest，test/*.test.cjs 走 node --test
+pnpm test         # 构建 + Vitest .ts 测试 + Node .cjs 测试
+pnpm test:unit    # Vitest，test/unit/**，不需要构建
+pnpm test:integration # 构建 + 所有 .cjs 测试
 pnpm typecheck
 pnpm check        # 格式检查 + 类型检查 + 构建 + 完整测试
 ```
@@ -82,11 +86,13 @@ pnpm dist:win     # Windows nsis + zip（需在 Windows 上运行）
 
 打包时会重新收集 pnpm 和转发器。Windows 构建需要对应架构的 MSVC Native Tools 环境及 Windows SDK，用于编译小型 `node.exe` 转发器。
 
-macOS 产物未签名，Gatekeeper 会拦截首次启动。允许方式：
+macOS 产物默认采用 ad-hoc bundle 签名，尚未公证；Gatekeeper 可能拦截首次启动。允许方式：
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 ```
+
+Developer ID 签名与公证步骤见 [macOS 签名说明](./signing-and-notarization.md)。
 
 ## 运行时依赖
 

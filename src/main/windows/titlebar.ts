@@ -1,7 +1,23 @@
 /**
- * 隐藏原生标题栏（`titleBarStyle: 'hiddenInset'`）之后，网页必须自己声明
- * 窗口拖动热区，否则窗口拖不动；同时必须把「盖在热区上的操作区」标成
- * `no-drag`，否则点不动。
+ * 隐藏原生标题栏（`titleBarStyle: 'hiddenInset'`）之后，本壳仍需自己声明的
+ * 少数拖拽热区。
+ *
+ * ## 本文件现在的职责已经很小——大部分交给上游了
+ *
+ * 上游 DSH 把「运行在 macOS 桌面壳」编码成 `<html data-platform="darwin">`
+ * 标记（由 `preload.ts` 设置），并围绕它提供了一整套窗口集成。因此历史上
+ * 本文件承担的多数规则**已由上游接管**，这里不再重复：
+ *
+ * | 职责 | 现在由谁负责 |
+ * | --- | --- |
+ * | 全宽顶部拖拽带（52px / 带 tab 时 76px） | 上游 `ui-layout` 的 `.leadingBand` |
+ * | 侧栏 logo 行 drag、brand 光标 | 上游 `ui-sidebar` |
+ * | 侧栏顶部 52px 让位条 | 上游 `ui-sidebar` 的 `.topStrip`（条件渲染） |
+ * | 全屏面板 strip 的 drag / chip 的 no-drag | 上游前端 `._stripTabs` 等（darwin 门控） |
+ * | 全屏面板 88px 内缩 | 上游 `ui-sidebar-right`（同一变量同一值） |
+ * | 面板 / 浮层 / 分隔条 no-drag | 上游前端 CSS |
+ *
+ * 本文件因此只保留**上游没有提供**的两条，见下面各段注释。
  *
  * ## Electron 的判定规则（不是 CSS 层叠）
  *
@@ -10,81 +26,65 @@
  * （顺序 = 元素的绘制顺序，见 `shell/browser/ui/drag_util.cc` 注释）。
  *
  * 关键推论：**没声明 `app-region` 的元素不产生矩形，因此挡不住下层热区**。
- * 任何覆盖在热区之上的浮层（全屏右侧面板、桌宠、overlay 窗口）都必须自己
- * 显式声明 `no-drag`，否则下层的 drag 会穿透上来 —— 表现为「点不动」。
+ * 上游正依赖这一点：全屏右侧面板铺满窗口且**不声明** app-region，于是
+ * 框架的 `.leadingBand` 能穿透它继续提供顶部拖拽。**因此本文件绝不能给
+ * 面板加 no-drag** —— 那会把上游的拖拽带整条掐掉，窗口拖不动。
  *
  * ## 选择器策略
  *
  * DSH 是运行时升级的 web 包，CSS Module 类名带构建 hash（`wSkVaW_header`），
- * 只用 `[class*='camelCase 后缀']` 属性选择器匹配稳定后缀；新版本 DSH 提供了
- * 稳定的 `data-dockkit-*` / `data-sidebar-right-*` 属性，优先用它们。
- * 覆盖性质的声明（内缩、外边距）带 `!important`，防止运行时注入的样式推翻。
+ * 只用 `[class*='camelCase 后缀']` 属性选择器匹配稳定后缀；上游提供了稳定的
+ * `data-*` 属性时优先用它们。覆盖性质的声明带 `!important`。
  */
 
-/** macOS 红绿灯带所需的最小左侧留白：三个按钮 + 最左侧按钮的左边距。 */
-const FULLSCREEN_STRIP_INSET_PX = 80
+/**
+ * macOS 红绿灯带所需的最小左侧留白。
+ *
+ * 保留此常量是为了让上游值与本壳认知可对照：上游在
+ * `ui-sidebar-right` 里用 `--dsh-dockkit-strip-inline-start: 88px`
+ * 给全屏面板首列让位，本文件不再重复那条规则（见上文表格）。
+ */
+export const FULLSCREEN_STRIP_INSET_PX = 88
 
 /**
  * 生成注入到 DSH 网页的标题栏 chrome CSS。
  *
- * @param platform - `process.platform`；只有 macOS 需要为红绿灯让位，
- *   Windows 有原生标题栏，侧栏与面板都不必留白。
+ * @param platform - `process.platform`；只有 macOS 需要为红绿灯让位。
+ * @param _nativeFullscreen - 原生窗口全屏。**当前不再影响本函数的输出** ——
+ *   上游用 `<html data-fullscreen>` 自行处理全屏差异（内缩回 10px、
+ *   `--dsh-frame-leading-clearance` 取 84px），该标记由
+ *   `titlebar-controller.ts` 维护。保留形参以免调用方与测试改动。
  * @returns 注入用的完整 CSS 文本。
  */
-export function titleBarChromeCSS(platform: NodeJS.Platform): string {
-  const isMac = platform === 'darwin'
-
-  // Windows 有原生标题栏，侧栏不必为红绿灯留上边距，也没有红绿灯要避。
-  const macSidebarInset = isMac
-    ? `
-    [class*='logoRow'] { -webkit-app-region: drag; margin-top: 20px !important; }
-    :has(> [class*='logoRow']) { position: relative; }
-    :has(> [class*='logoRow'])::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 40px;
-      -webkit-app-region: drag;
-    }`
-    : `
-    [class*='logoRow'] { -webkit-app-region: drag; }`
-
-  // 全屏右侧面板铺满整个窗口（`position:fixed; inset:0; z-index:40`），
-  // 左上角正好压住红绿灯与侧栏顶部通条。macOS 下给「贴着窗口左边缘」的那条
-  // tab strip 内缩，让 chip 落到红绿灯右侧；strip 其余部分保持可拖。
+export function titleBarChromeCSS(_platform: NodeJS.Platform, _nativeFullscreen = false): string {
+  // 侧栏 logo 行的交互控件必须 no-drag。
   //
-  // **必须完整地用子代组合器链一路限定到 pane 本身**，否则会把右 pane 也命中：
-  // 每个 pane 的 strip 都是它自己 pane 的直接子元素，所以
-  // `[data-dockkit-pane] > [data-dockkit-strip]` 并不等于「最左侧那个 pane」，
-  // 它匹配所有 pane。只有 pane 自己坐在下面两种位置时，它的左边缘才等于
-  // 窗口左边缘：
+  // 上游只声明了 `.logoRow { drag }` 与 brand 的 `cursor: default`，并用
+  // 「brand 不再是 New Session 入口」的方式避免误拖；但 logoRow 里仍有
+  // 收起/展开等真实 `<button>`。`app-region` **不继承**，父级 drag 会让
+  // 子按钮的点击被判成拖窗口，所以这里逐个挖回来。
   //
-  //   未分屏：`surface > pane`（根 pane 是 surface 的直接子元素）
-  //   分屏后：`cell:first-child > pane`（左 pane 是第一个 cell 的直接子元素；
-  //           右 pane 在 `cell[data-dockkit-cell='…:1']` 里，起点在窗口中
-  //           部，够不着红绿灯，不缩进）
-  //
-  // `.split` 的子元素顺序是 [cell0, divider, cell1]，故 cell0 确实是第一个
-  // 子元素；子代组合器 `>` 保证不会把 cell 里的后代 strip 误当成 cell 的直属子代。
-  const fullscreenStripInset = isMac
-    ? `
-    [data-sidebar-right-panel='fullscreen'] :is([data-dockkit-surface], [data-dockkit-cell]:first-child) > [data-dockkit-pane] > [data-dockkit-strip] {
-      padding-left: ${FULLSCREEN_STRIP_INSET_PX}px !important;
-    }`
-    : ''
-
-  return `
-    /* ================= 1. 侧栏 logo 行：macOS 为红绿灯留白；Windows 贴顶 ================= */
-    ${macSidebarInset}
+  // 上游的全局 `[role=button]` no-drag 覆盖不到裸 `<button>`（DOM 上没有
+  // role 属性），故这条不能省。
+  const logoRowControls = `
     [class*='logoRow'] button,
     [class*='logoRow'] a,
-    [class*='logoRow'] [role='button'] { -webkit-app-region: no-drag; }
+    [class*='logoRow'] [role='button'] { -webkit-app-region: no-drag; app-region: no-drag; }`
 
-    /* ================= 2. 中间列会话顶栏：整行可拖，交互控件除外 =================
-       整个应用只有会话顶栏渲染 <header> 元素（详情面板等均为 div），
-       故直接用元素选择器；headerHidden 时 display:none，规则自然失效。 */
+  // 中间列会话顶栏：整行可拖，交互控件除外。
+  //
+  // **上游没有提供这条**：`ui-conversation` 只给了 header 内部四个区域
+  // （headerLeading / headerActions / headerUtilities / headerCorner）的
+  // no-drag，以及 `.headerSessionless` 的间距调整，从未把 header 本身声明为
+  // drag。上游的 `.leadingBand` 只覆盖顶部 52px，而带视图 tab 条的 header
+  // 高约 76px，下半部分（tab 条那一行）不在 band 范围内。因此这条保留。
+  //
+  // 整个应用只有会话顶栏渲染 <header> 元素（详情面板等均为 div），
+  // 故直接用元素选择器；headerHidden 时 display:none，规则自然失效。
+  const conversationHeader = `
     header[class*='header']:not([class*='headerHidden']) {
       -webkit-app-region: drag;
+      app-region: drag;
     }
     header[class*='header'] button,
     header[class*='header'] a,
@@ -93,54 +93,82 @@ export function titleBarChromeCSS(platform: NodeJS.Platform): string {
     header[class*='header'] input,
     header[class*='header'] select {
       -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }`
+
+  // Windows 有原生标题栏，Electron 会整份忽略渲染进程上报的拖动区域
+  // （WebContents::DraggableRegionsChanged 在 owner_window()->has_frame()
+  // 时直接 return），故这些规则在 Windows 上既不生效也不有害。
+  //
+  // ============ 窗口拖不动（0.2.1 回归）与修复 ============
+  //
+  // 症状：0.2.1 起窗口**任何位置**都拖不动；0.2.0 正常。
+  //
+  // 直接原因（已实测确证）：本壳从 0.2.1 起设置 `data-platform="darwin"`，
+  // 激活了上游一条 darwin 门控的兜底规则：
+  //
+  //   html[data-platform="darwin"] body > :not(#root) { app-region: no-drag }
+  //
+  // 它在真实环境里命中 4 个 body 直系子元素，其中两个是**铺满整窗
+  // 1280×800** 的插件浮层（绘制在 #root 之后）：
+  //
+  //   .PCRLGG_5b7534_layer              1280×800
+  //   .dsh-status-rotator-danmaku-layer 1280×800
+  //
+  // Electron 把 drag/no-drag 当作有序矩形列表、重叠处**后绘制者胜出**，
+  // 于是这两个 no-drag 矩形把整个窗口从拖拽区里减掉 —— 按在哪里都判定为
+  // 「非拖拽区」。
+  //
+  // 实测对照（同一实例，仅切换标记）：
+  //   带标记     → 两个浮层 getComputedStyle().webkitAppRegion = "no-drag"
+  //   移除标记   → 变为 "none"
+  // 即标记正是这两个矩形出现的开关。
+  //
+  // 上游本该由 `.leadingBand` 提供顶部拖拽带，但那条**不可用**：它是
+  // `pointer-events: none`，实测 elementFromPoint(100,26) 穿透到下层 <p>，
+  // 自身不被命中，因此不产生可用热区。
+  //
+  // 修复分两半：
+  //
+  //   a. 把整窗浮层还原为初值 `revert` —— 它们不再产生任何矩形，
+  //      既不减区也不加区，整窗不再被误减。实测 `revert` 即可生效，
+  //      无需 !important。
+  //      真正需要 no-drag 的交互浮层不受影响：菜单/对话框自带 role，
+  //      由上游前端 `[role=...] { no-drag }` 单独覆盖，与此无关。
+  //
+  //   b. 自补一条**可命中**的顶部全宽热区（0.2.0 的做法）。它必须
+  //      `pointer-events: auto`（上游 band 的教训），并以伪元素 +
+  //      z-index:-1 压在内容下层，既产生 drag 矩形又不遮挡顶栏按钮。
+  //      高度 52px 与上游 band / 侧栏 `.topStrip` 同值。
+  const topDragBand = `
+    /* a. 中和上游 body>:not(#root){no-drag}：整窗不再被满屏浮层减区。
+       必须 !important：本壳样式表与上游同为作者级，上游那条特异性相同
+       且加载在后；不加 important 会被它压过（实测）。 */
+    html[data-platform='darwin'] body > :not(#root) {
+      -webkit-app-region: revert !important;
+      app-region: revert !important;
     }
 
-    /* ================= 3. 中间列顶部通条：顶栏隐藏时（hero/空会话态）仍可拖动 =================
-       伪元素压在顶栏/内容下层（z-index:0），不可点击但可拖动，不遮挡交互控件。 */
-    [class*='centerCol'] { position: relative; }
-    [class*='centerCol']::before {
+    /* b. 自补可命中的顶部全宽热区 */
+    html[data-platform='darwin'] #root::before {
       content: '';
-      position: absolute;
+      position: fixed;
       top: 0; left: 0; right: 0;
-      height: 40px;
-      z-index: 0;
+      height: 52px;
+      z-index: -1;
+      pointer-events: auto;
       -webkit-app-region: drag;
-    }
+      app-region: drag;
+    }`
 
-    /* ================= 4. 浮层穿透切断：浮层必须自己声明 no-drag =================
-       没声明 app-region 的元素不产生矩形，挡不住第 1~3 条的热区。全屏右侧
-       面板、浮动面板覆盖在上方时，必须由自己把下层热区减掉。
+  return `
+    /* ================= 0. 顶部全宽拖拽带 ================= */
+    ${topDragBand}
 
-       面板铺满窗口后，第 1、3 条的顶部通条都在它下面：这里先整块 no-drag，
-       再由第 5 条把全屏面板的 tab strip 单独挖回来当标题栏用。push 模式下面板
-       只占右侧一条，整块 no-drag 同样正确（面板内不该触发窗口拖动）。
+    /* ================= 1. 侧栏 logo 行的交互控件 ================= */
+    ${logoRowControls}
 
-       Windows 有原生标题栏，Electron 会整份忽略渲染进程上报的拖动区域
-       （WebContents::DraggableRegionsChanged 在 owner_window()->has_frame()
-       时直接 return），故这两条无需按平台分支，留着也不会有副作用。 */
-    [data-sidebar-right-panel],
-    [data-dockkit-float],
-    [data-sidebar-right-float-host] { -webkit-app-region: no-drag; }
-
-    /* ================= 5. 全屏右侧面板的 tab strip：当标题栏用 =================
-       面板自己没有 header，tab strip 就是它的整个顶边。全屏时它是窗口顶部
-       唯一空着的横条，声明成 drag 让窗口仍可拖动；chip、close、addTab、两个
-       面板控制按钮、以及分屏分隔条全部 no-drag。strip 上的空白处（stripFill）
-       故意保持 drag —— 那是这一行里唯一该用来拖窗口的地方。 */
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] {
-      -webkit-app-region: drag;
-    }
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] [data-dockkit-tab],
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] [data-dockkit-strip-chrome],
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] button,
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] a,
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] input,
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] select,
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] [role='button'],
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-strip] [role='tab'],
-    [data-sidebar-right-panel='fullscreen'] [data-dockkit-divider] {
-      -webkit-app-region: no-drag;
-    }
-    ${fullscreenStripInset}
+    /* ================= 2. 中间列会话顶栏 ================= */
+    ${conversationHeader}
   `
 }

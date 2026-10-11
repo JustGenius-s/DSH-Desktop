@@ -5,7 +5,7 @@
  * 不引入 Menu / Tray / Notification / BrowserWindow。普通浏览器没有 window.dshDesktop。
  */
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import { MAX_BODY, MAX_TITLE, WEB_NOTIFICATION_CONTRIBUTOR } from './main/notifications/constants'
 import { installWebNotificationBridge } from './main/notifications/web-bridge'
 import type {
@@ -110,6 +110,26 @@ const api: DshDesktop = {
 }
 
 contextBridge.exposeInMainWorld('dshDesktop', api)
+
+// 告诉 DSH 网页「我跑在 macOS 原生壳里」。上游用 `<html data-platform="darwin">`
+// 决定拖拽带、侧栏和列宽；普通网页不会设这个标记。preload 可能早于 documentElement，
+// 所以立刻试一次，并在 readystatechange / DOMContentLoaded 再补。
+if (process.platform === 'darwin') {
+  const MARK_DARWIN = `(() => {
+  const apply = () => {
+    const root = document.documentElement
+    if (root === null) return
+    if (root.dataset.platform === 'darwin') return
+    root.dataset.platform = 'darwin'
+  }
+  apply()
+  document.addEventListener('readystatechange', apply)
+  document.addEventListener('DOMContentLoaded', apply, { once: true })
+})()`
+  void webFrame.executeJavaScript(MARK_DARWIN).catch(() => {
+    // 文档尚未建立时执行会失败；下一次导航仍会重试。
+  })
+}
 
 // Electron 会序列化函数；跨上下文所需的常量必须显式传参。
 try {

@@ -1,6 +1,9 @@
 /**
  * 系统通知所有者：主进程用 Electron Notification 弹出，preload 只过 JSON。
  * 不是席位——没有合并/重建，同 contributor+id 替换，窗口销毁或 close 即消失。
+ *
+ * 只走系统通知。壳内自绘浮层会在系统没把通知发出时仍然显示，所以不再画。
+ * `shown` 等系统回执：`failed` 返回 false；1.5 秒内没有回执则按已投递。
  */
 
 import {
@@ -17,11 +20,12 @@ import {
 } from '../../shared/api'
 import { Ipc } from '../../shared/ipc'
 import { focusMainWindow, webContentsById } from '../windows/registry'
-import { bannerKey, closeBanner, showBannerOverlay } from './banners'
 import { MAX_BODY, MAX_TITLE, WEB_NOTIFICATION_CONTRIBUTOR } from './constants'
 
 const MAX_ACTIVE_PER_CONTRIBUTOR = 3
 const MIN_NEW_ID_INTERVAL_MS = 10_000
+/** 等系统回执（show / failed）的上限；超时按已投递处理，不拖住调用方。 */
+const SHOW_CONFIRM_TIMEOUT_MS = 1_500
 
 interface ActiveNote {
   contributor: string
@@ -29,8 +33,12 @@ interface ActiveNote {
   wcId: number
   instanceId?: string
   notification: Notification | null
-  bannerOpen: boolean
+  confirmed: boolean
   removeListeners: () => void
+  /** 还在等回执时被关掉、替换或失败：这次 show 算失败。 */
+  cancelConfirm?: () => void
+  /** 用户点到了通知，说明它确实出现过。 */
+  acceptConfirm?: () => void
 }
 
 const active: ActiveNote[] = []
@@ -76,14 +84,17 @@ function drop(row: ActiveNote, notify = true): void {
   if (idx < 0) return
   // 先释放所有权和事件，再调用可能同步触发 close 的原生 API。
   active.splice(idx, 1)
+  const cancel = row.cancelConfirm
+  row.cancelConfirm = undefined
+  row.acceptConfirm = undefined
   row.removeListeners()
   try {
     row.notification?.close()
   } catch {
     // 系统侧可能已经关掉。
   }
-  closeBanner(bannerKey(row.wcId, row.contributor, row.id))
   if (notify) sendEvent(row, Ipc.notify.closed)
+  cancel?.()
 }
 
 function closeMatching(wcId: number, contributor: string, id?: string): void {
@@ -124,7 +135,31 @@ function countContributor(wcId: number, contributor: string): number {
   return active.filter((row) => row.wcId === wcId && row.contributor === contributor).length
 }
 
-function showNote(wc: WebContents, spec: DesktopNotifySpec): DesktopNotifyResult {
+/** 等系统 `show` 或超时。中途被关掉、替换或 `failed` 则结束为未展示。 */
+function beginConfirm(row: ActiveNote, notification: Notification): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: NodeJS.Timeout | undefined
+    const finish = (shown: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      notification.removeListener('show', onShow)
+      row.cancelConfirm = undefined
+      row.acceptConfirm = undefined
+      if (shown) row.confirmed = true
+      resolve(shown)
+    }
+    const onShow = (): void => finish(true)
+    timer = setTimeout(() => finish(true), SHOW_CONFIRM_TIMEOUT_MS)
+    timer.unref?.()
+    row.cancelConfirm = () => finish(false)
+    row.acceptConfirm = () => finish(true)
+    notification.on('show', onShow)
+  })
+}
+
+async function showNote(wc: WebContents, spec: DesktopNotifySpec): Promise<DesktopNotifyResult> {
   if (!Notification.isSupported()) {
     console.warn('[DSH-Desktop] system notifications not supported')
     return { shown: false }
@@ -171,7 +206,7 @@ function showNote(wc: WebContents, spec: DesktopNotifySpec): DesktopNotifyResult
     instanceId: spec.instanceId,
     wcId: wc.id,
     notification,
-    bannerOpen: true,
+    confirmed: false,
     removeListeners: () => {
       notification.removeListener('click', onAction)
       notification.removeListener('close', onNativeClosed)
@@ -182,44 +217,42 @@ function showNote(wc: WebContents, spec: DesktopNotifySpec): DesktopNotifyResult
 
   const onAction = (): void => {
     if (!active.includes(row)) return
+    row.acceptConfirm?.()
     focusMainWindow()
     sendEvent(row, Ipc.notify.action)
     drop(row)
   }
   const onNativeClosed = (): void => {
-    row.removeListeners()
-    row.notification = null
-    if (!row.bannerOpen) drop(row)
+    if (!active.includes(row)) return
+    // 还没有 show 回执时，关闭只结束这次 show，不把它报成已展示。
+    drop(row, row.confirmed)
   }
   const onNativeFailed = (_event: unknown, error: string): void => {
     console.warn('[DSH-Desktop] notification failed', spec.contributor, spec.id, error)
-    onNativeClosed()
+    if (!active.includes(row)) return
+    drop(row, row.confirmed)
   }
   notification.on('click', onAction)
   notification.on('close', onNativeClosed)
   notification.on('failed', onNativeFailed)
 
-  try {
-    showBannerOverlay(wc.id, spec, {
-      onAction,
-      onClosed: () => {
-        row.bannerOpen = false
-        if (row.notification === null) drop(row)
-      },
-    })
-  } catch (err) {
-    row.bannerOpen = false
-    console.warn('[DSH-Desktop] notification banner failed', err)
-  }
+  const pending = beginConfirm(row, notification)
   try {
     notification.show()
   } catch (err) {
     console.warn('[DSH-Desktop] notification.show failed', err)
-    onNativeClosed()
+    drop(row, false)
+    return { shown: false }
+  }
+
+  const shown = await pending
+  if (!shown) {
+    if (active.includes(row)) drop(row, false)
+    return { shown: false }
   }
 
   console.log(`[DSH-Desktop] notify ${spec.contributor}:${spec.id}`)
-  return { shown: active.includes(row) }
+  return { shown: true }
 }
 
 let initialized = false
@@ -228,7 +261,7 @@ let initialized = false
 export function setupDesktopNotify(): void {
   if (initialized) return
   initialized = true
-  ipcMain.handle(Ipc.notify.show, (event, raw: unknown): DesktopNotifyResult => {
+  ipcMain.handle(Ipc.notify.show, (event, raw: unknown): Promise<DesktopNotifyResult> => {
     const spec = sanitizeShow(raw)
     if (spec === null) {
       console.warn('[DSH-Desktop] rejected notify spec', raw)

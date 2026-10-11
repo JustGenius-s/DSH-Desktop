@@ -13,12 +13,12 @@ if (desktop === undefined) return // 非桌面壳，空操作
 
 四族并列，不要把动作摊到根上，也不要把通知或 overlay 做成席位。其中 `updates` 只做执行——检测在壳里。
 
-| 族 | 语义 | 寿命 |
-|---|---|---|
-| `updates` | 更新执行（检测在壳里） | 一次请求 |
-| `seats` | 持久原生 UI 贡献（菜单 / 托盘） | 跟插件 fiber 同寿 |
-| `notify` | 系统通知 | 弹出 / 替换 / 关掉 |
-| `overlays` | 同源原生小窗（透明置顶等） | 跟贡献窗口同寿 |
+| 族         | 语义                            | 寿命               |
+| ---------- | ------------------------------- | ------------------ |
+| `updates`  | 更新执行（检测在壳里）          | 一次请求           |
+| `seats`    | 持久原生 UI 贡献（菜单 / 托盘） | 跟插件 fiber 同寿  |
+| `notify`   | 系统通知                        | 弹出 / 替换 / 关掉 |
+| `overlays` | 同源原生小窗（透明置顶等）      | 跟贡献窗口同寿     |
 
 主进程不跑 Cordis，也不把 `Menu` / `Tray` / `Notification` / `BrowserWindow` 对象交给网页。点击只回传 `{ contributor, id }`。
 
@@ -41,14 +41,16 @@ if (desktop === undefined) return // 非桌面壳，空操作
 网页这一族只剩执行——因为下面每件事都必须由打包好的桌面应用来做：
 
 ```ts
-const version = await desktop.updates.appVersion()   // 壳的打包版本，如 '0.2.0'
-await desktop.updates.downloadApp()                 // 用系统浏览器打开发布页
-await desktop.updates.updateDsh('0.1.7-rc.1')       // pnpm 装指定版本（省略则装最高的）
-await desktop.updates.restartWeb()                   // 热重启 dsh web，桌面壳不退出
-desktop.updates.onPrompt((prompt) => { /* 用 DSH Modal 渲染 */ })
+const version = await desktop.updates.appVersion() // 壳的打包版本，如 '0.2.0'
+await desktop.updates.downloadApp() // 用系统浏览器打开发布页
+await desktop.updates.updateDsh('0.1.7-rc.1') // pnpm 装指定版本（省略则装最高的）
+await desktop.updates.restartWeb() // 热重启 dsh web，桌面壳不退出
+desktop.updates.onPrompt((prompt) => {
+  /* 用 DSH Modal 渲染 */
+})
 desktop.updates.ackPrompt(prompt.id)
-desktop.updates.respondPrompt(prompt.id, 'later')    // 或 'restart'
-desktop.updates.relaunch()                           // 重启整个桌面应用
+desktop.updates.respondPrompt(prompt.id, 'later') // 或 'restart'
+desktop.updates.relaunch() // 重启整个桌面应用
 ```
 
 要点：
@@ -59,6 +61,7 @@ desktop.updates.relaunch()                           // 重启整个桌面应用
   托盘都还在。装完 DSH 运行时、或插件配置变了之后，壳会通过 `onPrompt` 推一条
   询问，由插件用 DSH Modal 渲染「稍后 / 立即重启服务」——不是系统原生 dialog，
   也不强制。用户点「稍后」后同一份变更不再烦，再改才再问。
+- 提示的 `ackPrompt` / `respondPrompt` 只接受收到该提示的主窗口主框架。窗口销毁、主框架换文档或 renderer 结束时，旧提示作废并清理计时器；稍后到达的旧 ID 不会重启服务。
 - `updateDsh()` 由菜单发起，跑 pnpm 要一两分钟，所以全程有回执：开始弹一条系统通知，
   菜单项同时切成「正在更新」并禁用；装完弹结果，失败弹错误框。
 - 装完若用户选「稍后」，新运行时只是落到磁盘上、跑着的还是旧版。此时壳把它记成
@@ -73,11 +76,9 @@ desktop.updates.relaunch()                           // 重启整个桌面应用
 await desktop.seats.contribute({
   seat: 'applicationMenu',
   contributor: 'desktop-update',
-  menu: 'app',       // 或 'plugins'
+  menu: 'app', // 或 'plugins'
   order: 20,
-  items: [
-    { id: 'check-now', label: '检查更新…', accelerator: 'CmdOrCtrl+Shift+U' },
-  ],
+  items: [{ id: 'check-now', label: '检查更新…', accelerator: 'CmdOrCtrl+Shift+U' }],
 })
 await desktop.seats.contribute({
   seat: 'tray',
@@ -128,15 +129,19 @@ await desktop.notify.close('desktop-update', 'update-ready')
 await desktop.notify.close('desktop-update') // 该 contributor 全部
 ```
 
-- 不支持或被限流时 `{ shown: false }`，规格非法才抛错
+- 不支持、系统拒绝或被限流时 `{ shown: false }`，规格非法才抛错
 - 每个 contributor 最多 3 条同时存在；新 id 间隔至少 10 秒
 - 标题最长 80，正文最长 240
 - 插件卸载时应 `close(contributor)`
-- `onClosed(listener)` 在通知结束（系统提示与壳内横幅均关闭）、主动关闭或被替换时回调；返回取消订阅函数
+- 只有系统通知一条通路。壳内自绘浮层不再使用：它会在系统通知没发出时仍然显示
+- `shown: true` 等系统回执：`show` 到达才算成功，`failed`（例如签名无效）返回 `{ shown: false }`。1.5 秒内既无 `show` 也无 `failed` 时按已投递处理
+- `onClosed(listener)` 在系统通知结束、主动关闭或被替换时回调；返回取消订阅函数。展示失败只体现为 `{ shown: false }`
 - 高频替换同一 `id` 时可传 `instanceId`（与 `id` 相同的格式限制），`onAction` / `onClosed` 会原样带回，便于忽略旧实例的迟到事件
-- 页面整页导航或窗口销毁时，主进程释放该页面的通知、横幅和限流记录
+- 页面整页导航或窗口销毁时，主进程释放该页面的通知和限流记录
 
 macOS 打包包在 `Info.plist` 里声明了 `NSUserNotificationAlertStyle=alert`。开发态 `pnpm start` 走 Electron 二进制，通知可能显示为 Electron，系统也可能先问权限。
+
+系统通知能弹出来要求 app 有有效 bundle 签名：只带 Electron 自带 linker 签名（identifier=`Electron`、Info.plist 未绑定）的包会被 `usernotificationsd` 拒绝 `addRequest`，只回一个 `UNErrorDomain 1`。打包配置见 [signing-and-notarization.md](./signing-and-notarization.md)。
 
 网页里的 `new Notification()`（例如 `dsh-notification` 插件）由主窗口 preload 接到本族原生通知。Chromium 自己的 Notification API 在桌面壳里会显示已授权、却不向系统申请 UNUserNotificationCenter，横幅被静默丢掉。
 

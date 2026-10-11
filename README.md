@@ -55,6 +55,9 @@ After a successful boot, the web port is saved in `web-port.json` under Electron
 
 ## Develop
 
+Use Node 24 LTS for the local build and test commands below. The test runner uses
+recursive globs, and the macOS launcher test needs `--no-use-system-ca` support.
+
 ```sh
 pnpm install
 pnpm collect      # collect pnpm and Electron launchers into runtime/
@@ -69,18 +72,19 @@ Tests (no Electron window or browser required):
 ```sh
 pnpm test               # build + both runners (see below)
 pnpm test:unit          # vitest, test/unit/**  (no build needed)
-pnpm test:integration   # build + test/integration/**
+pnpm test:integration   # build + all .cjs suites
 pnpm typecheck
 pnpm check              # formatting + typecheck + build + all tests
 ```
 
-`test/` mirrors `src/` so a failing file names the module it covers:
+The TypeScript suites mirror source modules; the CommonJS suites exercise built output:
 
-| Path | Runner | What it may import |
-| --- | --- | --- |
-| `test/unit/**/*.test.ts` | vitest | `src/` directly; Electron via `vi.mock` |
-| `test/integration/**/*.test.ts` | vitest | `src/` directly, multi-module flows |
-| `test/integration/**/*.test.cjs` | `node:test` | only built `dist/` and `scripts/` |
+| Path                             | Runner      | What it may import                          |
+| -------------------------------- | ----------- | ------------------------------------------- |
+| `test/unit/**/*.test.ts`         | vitest      | `src/` directly; Electron via `vi.mock`     |
+| `test/integration/**/*.test.ts`  | vitest      | `src/` directly, multi-module flows         |
+| `test/integration/**/*.test.cjs` | `node:test` | only built `dist/` and `scripts/`           |
+| `test/*.test.cjs`                | `node:test` | built desktop modules with Electron doubles |
 
 The `.ts` suites run under vitest; the `.cjs` suites are plain `node:test`
 (see `vitest.config.ts`, which deliberately excludes them). The `test` script
@@ -95,11 +99,14 @@ pnpm dist:win     # Windows nsis + zip (run on Windows)
 
 Packaging recollects pnpm and the launchers. Windows builds require the matching MSVC Native Tools environment and Windows SDK for the small forwarding `node.exe`.
 
-macOS artifacts are unsigned; Gatekeeper blocks first launch. Allow with:
+macOS artifacts use ad-hoc bundle signing by default and are not notarized.
+Gatekeeper may block first launch. Allow with:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/DSH-Desktop.app
 ```
+
+For Developer ID signing and notarization, see [the macOS signing guide](docs/signing-and-notarization.md).
 
 ## Runtime dependencies
 
@@ -121,4 +128,5 @@ The shell injects `window.dshDesktop` into the DSH page (`updates` / `seats` / `
 Companion DSH plugins live in [DSH-Plugs](https://github.com/JustGenius-s/DSH-Plugs).
 
 ## Thanks to
+
 - [Linux do](https://linux.do/)

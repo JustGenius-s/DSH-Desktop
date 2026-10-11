@@ -16,5 +16,9 @@ scripts/probe-app/
 *.bak-*
 *.v3-debug
 
+# 验证夹具（浏览器实测用）
+.tmp-verify/
+.playwright-mcp/
+
 # 上游的本地归档目录
 .local-archive/
